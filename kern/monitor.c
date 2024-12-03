@@ -24,6 +24,7 @@ struct Command {
 static struct Command commands[] = {
 	{ "help", "Display this list of commands", mon_help },
 	{ "kerninfo", "Display information about the kernel", mon_kerninfo },
+	{ "backtrace", "Display information about the backtrace", mon_backtrace },
 };
 
 /***** Implementations of basic kernel monitor commands *****/
@@ -58,6 +59,25 @@ int
 mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 {
 	// Your code here.
+	// Lab 1 Exercise 11
+	cprintf("Stack backtrace:\n");
+	// read_ebp()返回的是地址，既然是地址就转型为指针型方便使用
+	uint32_t* ebp = (uint32_t*)read_ebp();
+	// 为什么边界条件是0？因为在entry.S中对ebp的首次初始化为 movl $0x0,%ebp
+	while(ebp != 0x0) {
+		cprintf("ebp %x eip %x ", ebp, *(ebp + 1));	// 注意这里的1是指针的偏移，实际偏移了4字节
+		cprintf("args %08x %08x %08x %08x %08x\n", *(ebp + 2), *(ebp + 3), *(ebp + 4), *(ebp + 5), *(ebp + 6));
+		// Lab 1 Exercise 12
+		struct Eipdebuginfo debuginfo;
+		if(!debuginfo_eip(*(ebp + 1), &debuginfo)) {
+			// 注意格式要严格按照打分脚本里的格式输出，否则可能打分判断错误
+			cprintf("%s:", debuginfo.eip_file);
+			cprintf("%d: ", debuginfo.eip_line);
+			cprintf("%.*s+", debuginfo.eip_fn_namelen, debuginfo.eip_fn_name);
+			cprintf("%d\n", *(ebp + 1) - debuginfo.eip_fn_addr);
+		}
+		ebp = (uint32_t*)(*ebp);
+	}
 	return 0;
 }
 
