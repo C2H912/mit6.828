@@ -192,10 +192,13 @@ cga_putc(int c)
 	}
 
 	// What is the purpose of this?
+	// 显示的内容满一页或超过一页时，清除掉最上面的行
 	if (crt_pos >= CRT_SIZE) {
 		int i;
 
+		// 移动第二行到末尾行的内容到第一行开始的地方
 		memmove(crt_buf, crt_buf + CRT_COLS, (CRT_SIZE - CRT_COLS) * sizeof(uint16_t));
+		// 擦除掉最后一行
 		for (i = CRT_SIZE - CRT_COLS; i < CRT_SIZE; i++)
 			crt_buf[i] = 0x0700 | ' ';
 		crt_pos -= CRT_COLS;
