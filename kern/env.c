@@ -12,6 +12,11 @@
 #include <kern/trap.h>
 #include <kern/monitor.h>
 
+void
+mybp(int i) {
+	cprintf("breakpoint! %d\n", i);
+}
+
 struct Env *envs = NULL;		// All environments
 struct Env *curenv = NULL;		// The current env
 static struct Env *env_free_list;	// Free environment list
@@ -115,7 +120,24 @@ void
 env_init(void)
 {
 	// Set up envs array
-	// LAB 3: Your code here.
+	// LAB 3: Your code here. Exercise 2
+	env_free_list = NULL;
+	// 从末尾反向遍历到开头即可实现上述“Make sure the environments...”的要求
+	for(int i = NENV - 1; i >= 0; i--) {
+		envs[i].env_status = ENV_FREE; 
+		envs[i].env_id = 0;
+		envs[i].env_parent_id = 0;
+		envs[i].env_pgdir = NULL;
+		envs[i].env_runs = 0;
+		envs[i].env_link = env_free_list;
+		env_free_list = &envs[i];
+		memset(&envs[i].env_tf, 0, sizeof(envs[i].env_tf));
+	}
+	/*
+	 * 上面的for循环，我之前的写法是for(size_t i = NENV - 1; i >= 0; i--)，
+	 * 读者能看出有什么bug吗？没错，当i=0时，i--会发生下溢，i的值变为4294967295，
+	 * 满足i>=0，然后数组访问越界 :(
+	 */
 
 	// Per-CPU part of the initialization
 	env_init_percpu();
@@ -173,12 +195,21 @@ env_setup_vm(struct Env *e)
 	//    - The initial VA below UTOP is empty.
 	//    - You do not need to make any more calls to page_alloc.
 	//    - Note: In general, pp_ref is not maintained for
-	//	physical pages mapped only above UTOP, but env_pgdir
-	//	is an exception -- you need to increment env_pgdir's
-	//	pp_ref for env_free to work correctly.
+	//		physical pages mapped only above UTOP, but env_pgdir
+	//		is an exception -- you need to increment env_pgdir's
+	//		pp_ref for env_free to work correctly.
 	//    - The functions in kern/pmap.h are handy.
 
 	// LAB 3: Your code here.
+	// you need to increment env_pgdir's pp_ref for env_free to work correctly.
+	p->pp_ref++;
+	// set e->env_pgdir
+	e->env_pgdir = page2kva(p);	
+	// initialize the page directory
+	e->env_pgdir[PDX(UENVS)] = kern_pgdir[PDX(UENVS)];
+	e->env_pgdir[PDX(UPAGES)] = kern_pgdir[PDX(UPAGES)];
+	e->env_pgdir[PDX(KSTACKTOP-KSTKSIZE)] = kern_pgdir[PDX(KSTACKTOP-KSTKSIZE)];
+	e->env_pgdir[PDX(KERNBASE)] = kern_pgdir[PDX(KERNBASE)];
 
 	// UVPT maps the env's own page table read-only.
 	// Permissions: kernel R, user R
@@ -267,7 +298,53 @@ region_alloc(struct Env *e, void *va, size_t len)
 	//   'va' and 'len' values that are not page-aligned.
 	//   You should round va down, and round (va + len) up.
 	//   (Watch out for corner-cases!)
+	uint32_t cur_va = (uint32_t) ROUNDDOWN(va, PGSIZE);
+	while(cur_va < (uint32_t)((size_t)va + len)) {
+		struct PageInfo *page = page_alloc(0);
+		if(page == NULL) {
+			panic("region_alloc: page_alloc() fail\n");
+		}
+		int ret = page_insert(e->env_pgdir, page, (void*)cur_va, PTE_U | PTE_W);
+		if(ret != 0) {
+			panic("region_alloc: user page_insert() fail\n");
+		}
+		// Pages should be writable by user and kernel.
+		// 为什么明明是分配用户空间，内核也要管理这样一份副本呢？
+		// 因为我们现在还运行在内核态下，在OS从内核正式切换到用户态去执行的过程中，
+		// 内核需要对这部分用户空间进行一些操作，比如load_icode()中的memcpy，
+		// 如果不同时映射到kern_pgdir，内核就没有办法去操作这部分内存空间
+		ret = page_insert(kern_pgdir, page, (void*)cur_va, PTE_U | PTE_W);
+		if(ret != 0) {
+			panic("region_alloc: kern page_insert() fail\n");
+		}
+		cur_va += PGSIZE;
+	}
 }
+
+// 这是我之前的一个错误的写法，读者可以看看问题出在哪里，答案在函数尾给出
+static void
+WRONG_region_alloc_DONNOT_USE(struct Env *e, void *va, size_t len)
+{
+	uint32_t cur_va = (uint32_t) ROUNDDOWN(va, PGSIZE);
+	for(size_t i = 0; i < len; i += PGSIZE, cur_va += PGSIZE) {
+		struct PageInfo *page = page_alloc(0);
+		if(page == NULL) {
+			panic("region_alloc: page_alloc() fail\n");
+		}
+		int ret = page_insert(e->env_pgdir, page, (void*)cur_va, PTE_U | PTE_W);
+		if(ret != 0) {
+			panic("region_alloc: page_insert() fail\n");
+		}
+		ret = page_insert(kern_pgdir, page, (void*)cur_va, PTE_U | PTE_W);
+		if(ret != 0) {
+			panic("region_alloc: kern page_insert() fail\n");
+		}
+	}
+}
+// BUG：因为目的是要映射[va, va+len)的地址空间，这样写实际上只映射了
+// [ROUNDDOWN(va), ROUNDDOWN(va)+len)的空间，而ROUNDDOWN(va)+len在
+// 很多情况下都小于va+len，那么程序在访问ROUNDDOWN(va)+len到va+len的
+// 空间时，这部分是没有映射的，所以会发生错误。
 
 //
 // Set up the initial program binary, stack, and processor flags
@@ -297,14 +374,7 @@ load_icode(struct Env *e, uint8_t *binary)
 	// Hints:
 	//  Load each program segment into virtual memory
 	//  at the address specified in the ELF segment header.
-	//  You should only load segments with ph->p_type == ELF_PROG_LOAD.
-	//  Each segment's virtual address can be found in ph->p_va
-	//  and its size in memory can be found in ph->p_memsz.
-	//  The ph->p_filesz bytes from the ELF binary, starting at
-	//  'binary + ph->p_offset', should be copied to virtual address
-	//  ph->p_va.  Any remaining memory bytes should be cleared to zero.
-	//  (The ELF header should have ph->p_filesz <= ph->p_memsz.)
-	//  Use functions from the previous lab to allocate and map pages.
+
 	//
 	//  All page protection bits should be user read/write for now.
 	//  ELF segments are not necessarily page-aligned, but you can
@@ -323,11 +393,39 @@ load_icode(struct Env *e, uint8_t *binary)
 	//  What?  (See env_run() and env_pop_tf() below.)
 
 	// LAB 3: Your code here.
+	struct Elf * elf_hdr = (struct Elf*) binary;
+	// is this a valid ELF?
+	if (elf_hdr->e_magic != ELF_MAGIC) {
+		panic("load_icode: elf_hdr->e_magic != ELF_MAGIC\n");
+	}
+
+	struct Proghdr *ph = (struct Proghdr *) ((uint8_t *) elf_hdr + elf_hdr->e_phoff);
+	struct Proghdr *eph = ph + elf_hdr->e_phnum;
+	for (; ph < eph; ph++) {
+		//  You should only load segments with ph->p_type == ELF_PROG_LOAD.
+		if(ph->p_type == ELF_PROG_LOAD) {
+			//  Each segment's virtual address can be found in ph->p_va
+			//  and its size in memory can be found in ph->p_memsz.
+			region_alloc(e, (void*)ph->p_va, ph->p_memsz);
+			//  The ph->p_filesz bytes from the ELF binary, starting at
+			//  'binary + ph->p_offset', should be copied to virtual address ph->p_va. 
+			memcpy((void*)ph->p_va, binary + ph->p_offset, ph->p_filesz);
+			//  Any remaining memory bytes should be cleared to zero.
+			//  (The ELF header should have ph->p_filesz <= ph->p_memsz.)
+			if(ph->p_filesz > ph->p_memsz) {
+				panic("load_icode: ph->p_filesz > ph->p_memsz\n");
+			}
+			memset((void*)ph->p_va + ph->p_filesz, 0, ph->p_memsz - ph->p_filesz);
+		}
+	}
+
+	// 设置函数入口
+	e->env_tf.tf_eip = (uintptr_t)elf_hdr->e_entry;
 
 	// Now map one page for the program's initial stack
 	// at virtual address USTACKTOP - PGSIZE.
-
 	// LAB 3: Your code here.
+	region_alloc(e, (void*)(USTACKTOP - PGSIZE), PGSIZE);
 }
 
 //
@@ -341,6 +439,11 @@ void
 env_create(uint8_t *binary, enum EnvType type)
 {
 	// LAB 3: Your code here.
+	struct Env * new_env;
+	if(env_alloc(&new_env, 0) != 0) {
+		panic("env_create: env_alloc(&new_env, 0) fail\n");
+	}
+	load_icode(new_env, binary);
 }
 
 //
@@ -439,18 +542,6 @@ env_pop_tf(struct Trapframe *tf)
 void
 env_run(struct Env *e)
 {
-	// Step 1: If this is a context switch (a new environment is running):
-	//	   1. Set the current environment (if any) back to
-	//	      ENV_RUNNABLE if it is ENV_RUNNING (think about
-	//	      what other states it can be in),
-	//	   2. Set 'curenv' to the new environment,
-	//	   3. Set its status to ENV_RUNNING,
-	//	   4. Update its 'env_runs' counter,
-	//	   5. Use lcr3() to switch to its address space.
-	// Step 2: Use env_pop_tf() to restore the environment's
-	//	   registers and drop into user mode in the
-	//	   environment.
-
 	// Hint: This function loads the new environment's state from
 	//	e->env_tf.  Go back through the code you wrote above
 	//	and make sure you have set the relevant parts of
@@ -458,6 +549,33 @@ env_run(struct Env *e)
 
 	// LAB 3: Your code here.
 
-	panic("env_run not yet implemented");
+	// Note: if this is the first call to env_run, curenv is NULL.
+	if(curenv == NULL) {
+		// 1. Set 'curenv' to the new environment
+		curenv = e;
+		// 2. Set its status to ENV_RUNNING
+		curenv->env_status = ENV_RUNNING;
+		// 3. Use lcr3() to switch to its address space
+		lcr3(PADDR(curenv->env_pgdir));
+	}
+	// If this is a context switch (a new environment is running):
+	else if(curenv->env_id != e->env_id) {
+		// Set the current environment (if any) back to ENV_RUNNABLE if
+		// it is ENV_RUNNING (think about what other states it can be in)
+		if(curenv->env_status == ENV_RUNNING) {
+			curenv->env_status = ENV_RUNNABLE;
+		}
+		curenv = e;
+		curenv->env_status = ENV_RUNNING;
+		lcr3(PADDR(curenv->env_pgdir));
+	}
+	// Update its 'env_runs' counter
+	curenv->env_runs++;
+
+	// Use env_pop_tf() to restore the environment's
+	// registers and drop into user mode in the environment.
+	env_pop_tf(&curenv->env_tf);
+
+	//panic("env_run not yet implemented");
 }
 

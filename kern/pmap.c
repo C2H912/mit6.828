@@ -112,7 +112,7 @@ boot_alloc(uint32_t n)
 		used_npages += (nextfree - result) / PGSIZE;
 		/*
 		 * 怎么知道out of memory？还记得在mem_init()中一开始就执行的i386_detect_memory()吗
-		 * 实际没有npages可供boot_alloc()分配，有很多内存已被占用或不能再分配，你将在page_init()看到这一点
+		 * 实际没有npages可供boot_alloc()分配，毕竟当前已经使用了一部分内存，这里就不想那么复杂了
 		 */
 		if(used_npages > npages) {
 			panic("boot_alloc: we're out of memory\n");
@@ -174,7 +174,8 @@ mem_init(void)
 
 	//////////////////////////////////////////////////////////////////////
 	// Make 'envs' point to an array of size 'NENV' of 'struct Env'.
-	// LAB 3: Your code here.
+	// LAB 3: Your code here. Exercise 1
+	envs = (struct Env *) boot_alloc(sizeof(struct Env) * NENV);
 
 	//////////////////////////////////////////////////////////////////////
 	// Now that we've allocated the initial kernel data structures, we set
@@ -205,7 +206,7 @@ mem_init(void)
 	 * PADDR(page)是返回page自己所在的物理地址
 	 * page2pa(page)是返回page指向的内存页的物理地址
 	 */
-	boot_map_region(kern_pgdir, UPAGES, sizeof(struct PageInfo)*npages, PADDR(pages), PTE_U | PTE_P);
+	boot_map_region(kern_pgdir, UPAGES, sizeof(struct PageInfo) * npages, PADDR(pages), PTE_U | PTE_P);
 
 	//////////////////////////////////////////////////////////////////////
 	// Map the 'envs' array read-only by the user at linear address UENVS
@@ -213,7 +214,8 @@ mem_init(void)
 	// Permissions:
 	//    - the new image at UENVS  -- kernel R, user R
 	//    - envs itself -- kernel RW, user NONE
-	// LAB 3: Your code here.
+	// LAB 3: Your code here. Exercise 1
+	boot_map_region(kern_pgdir, UENVS, sizeof(struct Env) * NENV, PADDR(envs), PTE_U | PTE_P);
 
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
