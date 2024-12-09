@@ -205,7 +205,8 @@ env_setup_vm(struct Env *e)
 	p->pp_ref++;
 	// set e->env_pgdir
 	e->env_pgdir = page2kva(p);	
-	// initialize the page directory
+	// initialize the kernel portion of the new environment's address space
+	// 读者应该思考一下，为什么这里不用boot_map_region()? 答案将在这个函数结束后的注释中给出
 	e->env_pgdir[PDX(UENVS)] = kern_pgdir[PDX(UENVS)];
 	e->env_pgdir[PDX(UPAGES)] = kern_pgdir[PDX(UPAGES)];
 	e->env_pgdir[PDX(KSTACKTOP-KSTKSIZE)] = kern_pgdir[PDX(KSTACKTOP-KSTKSIZE)];
@@ -217,6 +218,19 @@ env_setup_vm(struct Env *e)
 
 	return 0;
 }
+/*
+ * 首先boot_map_region()是被static所修饰的，也就是说在这个文件中是“看不到”这个函数的，
+ * 自然从语法上就不能去调用这个函数。
+ * 
+ * 但是，假设我们把这个static去掉，让boot_map_region()能被调用，我们就应该用这个函数了吗？
+ * 
+ * 答案还是否定的。因为这里只是把内核的部分映射到用户的地址空间中，对于每个用户来说，内核部分
+ * 是无权修改的，且每个用户看到的这部分内容都应该是一样的，所以直接让用户去访问kern_pgdir的
+ * 对应页表即可。如果使用boot_map_region()的话，会给每个用户创建独属于自己的页表去维护这些
+ * 相同的的映射，这样会产生没必要的内存开销 (因为每个用户看到的这部分内容都是一样的！明明只需
+ * 要一份就行却创建了多个相同的副本)，而且如果这部分映射发生了变动，就需要同时修改所有的副本，
+ * 造成额外的性能开销。
+ */
 
 //
 // Allocates and initializes a new environment.
@@ -419,7 +433,8 @@ load_icode(struct Env *e, uint8_t *binary)
 		}
 	}
 
-	// 设置函数入口
+	// 设置函数入口。为什么把入口设置在这里？看完env_run()和env_pop_tf()后你就知道了
+	// 详细的讲解将在env_run()后面的注释中给出
 	e->env_tf.tf_eip = (uintptr_t)elf_hdr->e_entry;
 
 	// Now map one page for the program's initial stack
@@ -574,8 +589,56 @@ env_run(struct Env *e)
 
 	// Use env_pop_tf() to restore the environment's
 	// registers and drop into user mode in the environment.
+	// 执行这个函数后，就会进入到用户态，并执行用户程序
+	// 但是我相信你看完env_pop_tf()一定傻眼了，明明没有函数调用call指令，
+	// 怎么就能执行用户程序了？？？解释将在这个函数后的注释中给出
 	env_pop_tf(&curenv->env_tf);
 
 	//panic("env_run not yet implemented");
 }
-
+/*
+ * --- env_pop_tf()到底是怎样切换到用户程序执行的？
+ *
+ * 在传统编程语言里，我们要跳转到某个地方执行，最简单直接也是用的最多的是函数调用，按理来说我们知道了程序的入口，
+ * 就可以直接通过函数调用去到那里执行，比如在boot/main.c中跳转到内核的入口执行是这样写的：
+ * 
+ * 		((void (*)(void)) (ELFHDR->e_entry))();
+ * 
+ * 但是，这样写不能满足一个极其重要的需求，也就是：
+ * 		不支持内核态到用户态的切换。普通的函数调用，不会发生特权级的切换，我们不可能直接在内核态执行用户
+ * 		程序，否则用户程序可能危害内核，所以不能直接去调用用户程序。
+ * 
+ * 所以在这里，你不能直接运行简单的用户程序的函数调用，必须借助其他手段，有没有某种机制能满足上述需求呢？
+ * 
+ * 还真有，那就是中断机制。回想一下，发生中断时，会从用户态切换到内核态，会把当前指令的下一条指令的地址保存下来，
+ * 作为中断返回后继续执行的位置；中断处理完成后，中断返回会从内核态切换到用户态，会根据之前保存下来的指令地址，
+ * 跳转到对应的地方继续执行。你想想，只要我们把中断时保存的返回地址“偷偷地”改成我们想要执行的指令的地址，那中断返回后，
+ * 是不是就直接跳转到我们想要执行的代码去执行了？并且特权级的转换也由中断指令帮我们自动完成了，不劳我们费心。
+ * 
+ * 所以，我们借助中断的机制，实现我们从内核跳转到用户代码执行的目的。env_pop_tf()中的最后一条iret就是中断返回指令。
+ * 
+ * 但是现在还是有个问题，中断机制是配套使用的，应该是由两步组成的: <发生中断><中断返回>，而现在并没有发生中断啊，
+ * 怎么能直接调用中断返回指令iret呢？其实硬件并不会检测是否真的发生了中断，当机器看到iret时，他就自动去做中断返回
+ * 对应的操作，并不关心是否真的发生了中断。所以，我们只需要人为的模拟，或者说假装发生了中断即可。
+ * 
+ * 那么现在只需要模拟发生了中断即可。发生中断时机器到底做了哪些操作？最最最简单的就是把当前指令的下一条指令的地址保存
+ * 下来，具体来说是保存到栈上面，所以我们只需要把我们想要跳转到的地址放到栈里面就行（实际上不只有返回地址，细节读者可以
+ * 自己去了解），于是乎，在load_icode()中有这么一行：
+ * 
+ * 		e->env_tf.tf_eip = (uintptr_t)elf_hdr->e_entry;
+ * 
+ * 你可能要说：“欸，这不是放到了Trapframe结构体吗？不是说好要放到栈上面吗？”别急，我们看看env_pop_tf()的输入参数：
+ * 
+ * 		env_pop_tf(&curenv->env_tf);
+ * 
+ * 然后看一眼env_pop_tf()的第一行汇编：
+ * 
+ * 		movl %0,%%esp
+ * 
+ * 这里面 %0 代表的是函数输入的第一个参数，也就是&curenv->env_tf，而esp就是栈指针寄存器。你看，这不就把栈设置成了
+ * 我们的Trapframe了吗？然后iret指令执行时，他会去esp寄存器指向的地方去找返回地址，也就是去Trapframe中找返回地址，
+ * 这样就正好找到了elf_hdr->e_entry，并跳转到那里执行。
+ * 
+ * 总算讲完了，是不是很巧妙呢 :)
+ * 
+ */
