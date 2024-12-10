@@ -93,7 +93,7 @@ trap_init(void)
 	SETGATE(idt[0], 1, GD_KT, &Divide_Error, 0);
 	SETGATE(idt[1], 1, GD_KT, &Debug_Exception, 0);
 	SETGATE(idt[2], 1, GD_KT, &Non_Maskable_Interrupt, 0);
-	SETGATE(idt[3], 1, GD_KT, &Breakpoint, 0);
+	SETGATE(idt[3], 1, GD_KT, &Breakpoint, 3);
 	SETGATE(idt[4], 1, GD_KT, &Overflow, 0);
 	SETGATE(idt[5], 1, GD_KT, &BOUND_Range_Exceeded, 0);
 	SETGATE(idt[6], 1, GD_KT, &Invalid_Opcode, 0);
@@ -190,7 +190,17 @@ trap_dispatch(struct Trapframe *tf)
 {
 	// Handle processor exceptions.
 	// LAB 3: Your code here.
-	cprintf("trap_dispatch: todo\n");
+	switch (tf->tf_trapno) {
+	case T_BRKPT:
+		monitor(tf);	// 注意中断向量表中T_BRKPT的DPL要改为3
+		break;
+	case T_PGFLT:
+		/* code */
+		page_fault_handler(tf);
+		break;
+	default:
+		break;
+	}
 
 	// Unexpected trap: The user process or the kernel has a bug.
 	print_trapframe(tf);
