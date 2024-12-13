@@ -12,11 +12,6 @@
 #include <kern/trap.h>
 #include <kern/monitor.h>
 
-void
-mybp(int i) {
-	cprintf("breakpoint! %d\n", i);
-}
-
 struct Env *envs = NULL;		// All environments
 struct Env *curenv = NULL;		// The current env
 static struct Env *env_free_list;	// Free environment list

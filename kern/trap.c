@@ -216,6 +216,7 @@ trap_dispatch(struct Trapframe *tf)
 		if(ret < 0) {
 			break;
 		}
+		tf->tf_regs.reg_eax = ret;	/* 读者可以思考一下为什么返回值放在这里 */
 		return;		// 成功的话返回用户执行
 	default:
 		break;
@@ -238,6 +239,12 @@ trap_dispatch(struct Trapframe *tf)
  * 代码，这段代码最后会执行到_alltraps中的pushal，也就是把eax等寄存器的值记录到Trapframe中的tf_regs结构体
  * 里面。所以syscall()的参数最后会在tf_regs中。
  * 
+ * ------- 为什么syscall的返回值要这样写tf->tf_regs.reg_eax = ret？
+ * 
+ * 跟踪一下函数调用流程可知，把返回值存到tf->tf_regs.reg_eax后，trap_dispatch()返回trap()，
+ * trap()调用env_run()，最后调用env_pop_tf()中的popal，也就是把tf->tf_regs的值赋值给eax等寄存器，
+ * 所以返回值最后会放到eax寄存器里。然后用户态下的lib/syscall()继续执行，其中的汇编语言"=a" (ret)
+ * 表明把eax寄存器中的值作为返回值，所以通过eax寄存器作为中介，用户能获取到内核syscall()的返回值。
  */
 
 void
