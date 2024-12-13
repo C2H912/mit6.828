@@ -46,6 +46,7 @@
 /*
  * Lab 3: Your code here for generating entry points for the different traps.
  */
+	// 我不敢保证TRAPHANDLER和TRAPHANDLER_NOEC都选对了，forgive me :(
 	TRAPHANDLER_NOEC(Divide_Error, T_DIVIDE)
 	TRAPHANDLER_NOEC(Debug_Exception, T_DEBUG)
 	TRAPHANDLER_NOEC(Non_Maskable_Interrupt, T_NMI)
@@ -68,6 +69,8 @@
 
 	TRAPHANDLER_NOEC(Machine_Check, T_MCHK)
 	TRAPHANDLER_NOEC(SIMD_Floating_Point_Error, T_SIMDERR)
+
+	TRAPHANDLER_NOEC(System_Call, T_SYSCALL)
 
 /*
  * Lab 3: Your code here for _alltraps

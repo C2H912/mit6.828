@@ -82,6 +82,8 @@ void Floating_Point_Error();
 void Aligment_Check();
 void Machine_Check();
 void SIMD_Floating_Point_Error();
+// system call
+void System_Call();
 
 void
 trap_init(void)
@@ -111,6 +113,8 @@ trap_init(void)
 	SETGATE(idt[18], 1, GD_KT, &Machine_Check, 0);
 	SETGATE(idt[19], 1, GD_KT, &SIMD_Floating_Point_Error, 0);
 
+	// system call
+	SETGATE(idt[48], 1, GD_KT, &System_Call, 3);
 
 	// Per-CPU setup 
 	trap_init_percpu();
@@ -193,11 +197,26 @@ trap_dispatch(struct Trapframe *tf)
 	switch (tf->tf_trapno) {
 	case T_BRKPT:
 		monitor(tf);	// 注意中断向量表中T_BRKPT的DPL要改为3
-		break;
+		return;
 	case T_PGFLT:
-		/* code */
 		page_fault_handler(tf);
-		break;
+		return;
+	case T_SYSCALL:
+		// 跟系统调用有关系的就3个文件：inc/syscall.h, lib/syscall.c, kern/syscall.c
+		// inc/syscall.h很简单，就定义了系统调用号
+		// lib/syscall.c看文件夹名就知道，这是提供给用户调用的接口
+		// kern/syscall.c看文件夹名就知道，这是内核处理用户请求的具体实现
+		// 所以流程就是用户通过lib/syscall.c中的syscall()触发了中断(具体来说是int指令),内核识别到是系统
+		// 调用的中断号，就走到这个case中，调用具体的处理函数(写在kern/syscall.c中)进行处理
+		/*
+		 * 这里很精妙，读者可以思考一下为什么syscall的参数是这些，答案在trap_dispatch()结尾注释给出
+		 */
+		int32_t ret = syscall(tf->tf_regs.reg_eax, tf->tf_regs.reg_edx, tf->tf_regs.reg_ecx, 
+							  tf->tf_regs.reg_ebx,tf->tf_regs.reg_edx, tf->tf_regs.reg_esi);
+		if(ret < 0) {
+			break;
+		}
+		return;		// 成功的话返回用户执行
 	default:
 		break;
 	}
@@ -211,6 +230,15 @@ trap_dispatch(struct Trapframe *tf)
 		return;
 	}
 }
+/*
+ * ------- 为什么syscall的参数是这些？
+ *
+ * 跟踪一下系统调用的流程可知，用户调用lib/syscall.c中的syscall()时会把函数参数放到eax等寄存器中。
+ * 然后内核检测到中断发生，并根据中断向量号执行trapentry.S中对应的TRAPHANDLER_NOEC(System_Call, T_SYSCALL)
+ * 代码，这段代码最后会执行到_alltraps中的pushal，也就是把eax等寄存器的值记录到Trapframe中的tf_regs结构体
+ * 里面。所以syscall()的参数最后会在tf_regs中。
+ * 
+ */
 
 void
 trap(struct Trapframe *tf)
