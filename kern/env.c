@@ -118,7 +118,24 @@ void
 env_init(void)
 {
 	// Set up envs array
-	// LAB 3: Your code here.
+	// LAB 3: Your code here. Exercise 2
+	env_free_list = NULL;
+	// 从末尾反向遍历到开头即可实现上述“Make sure the environments...”的要求
+	for(int i = NENV - 1; i >= 0; i--) {
+		envs[i].env_status = ENV_FREE; 
+		envs[i].env_id = 0;
+		envs[i].env_parent_id = 0;
+		envs[i].env_pgdir = NULL;
+		envs[i].env_runs = 0;
+		envs[i].env_link = env_free_list;
+		env_free_list = &envs[i];
+		memset(&envs[i].env_tf, 0, sizeof(envs[i].env_tf));
+	}
+	/*
+	 * 上面的for循环，我之前的写法是for(size_t i = NENV - 1; i >= 0; i--)，
+	 * 读者能看出有什么bug吗？没错，当i=0时，i--会发生下溢，i的值变为4294967295，
+	 * 满足i>=0，然后数组访问越界 :(
+	 */
 
 	// Per-CPU part of the initialization
 	env_init_percpu();
@@ -176,12 +193,36 @@ env_setup_vm(struct Env *e)
 	//    - The initial VA below UTOP is empty.
 	//    - You do not need to make any more calls to page_alloc.
 	//    - Note: In general, pp_ref is not maintained for
-	//	physical pages mapped only above UTOP, but env_pgdir
-	//	is an exception -- you need to increment env_pgdir's
-	//	pp_ref for env_free to work correctly.
+	//		physical pages mapped only above UTOP, but env_pgdir
+	//		is an exception -- you need to increment env_pgdir's
+	//		pp_ref for env_free to work correctly.
 	//    - The functions in kern/pmap.h are handy.
 
 	// LAB 3: Your code here.
+	// you need to increment env_pgdir's pp_ref for env_free to work correctly.
+	p->pp_ref++;
+	// set e->env_pgdir
+	e->env_pgdir = page2kva(p);	
+	// initialize the kernel portion of the new environment's address space
+	/*
+	 * 这里有两个值得思考的问题：
+	 * 	  Q1：为什么要把内核的空间也映射用户的页目录表中？
+	 * 	  Q2：为什么这里不用boot_map_region()?
+	 * 答案将在本函数后的注释中给出。
+	 */
+	e->env_pgdir[PDX(UENVS)] = kern_pgdir[PDX(UENVS)];
+	e->env_pgdir[PDX(UPAGES)] = kern_pgdir[PDX(UPAGES)];
+	e->env_pgdir[PDX(KSTACKTOP-KSTKSIZE)] = kern_pgdir[PDX(KSTACKTOP-KSTKSIZE)];
+	// 这里要牢记要映射的范围的大小到底是多少！曾经的我只写了一行：
+	// 		e->env_pgdir[PDX(KERNBASE)] = kern_pgdir[PDX(KERNBASE)];
+	// 然后访问0xf7e6aff4时就发生内核态的Page Fault了，debug了一整天 :)
+	size_t size = 0x100000000 - KERNBASE;
+	size_t total_dir_count = size / PTSIZE;	// 注意不是PGSIZE，因为是页目录表不是页表
+	size_t count = 0;
+	while(count < total_dir_count) {
+		e->env_pgdir[PDX(KERNBASE + PTSIZE * count)] = kern_pgdir[PDX(KERNBASE + PTSIZE * count)];
+		count++;
+	}
 
 	// UVPT maps the env's own page table read-only.
 	// Permissions: kernel R, user R
@@ -189,6 +230,30 @@ env_setup_vm(struct Env *e)
 
 	return 0;
 }
+/*
+ * ------- Q1：为什么要把内核的空间也映射用户的页目录表中？
+ * 
+ * 一句话回答就是<在某些情况下，用户需要访问内核空间中的代码或数据>。你可能会说：“让用户访问内核
+ * 不会造成安全问题吗？”当然，如果让用户“随意地”访问，肯定是不可以的。然而在某些情况下，比如说异常，
+ * 或者系统调用，用户自己是没办法处理，他就需要调用内核中的中断处理程序来协助完成工作，所以这时候，
+ * 用户是需要借助页目录表和页表帮忙访问到内核的空间的。同时，为了安全起见，这部分是只有在内核态下才
+ * 可以访问到的（页目录表和页表中的PTE位会检查权限!），平时在用户态下是没办法执行的，特权级的切换
+ * 保证了安全性。操作系统的设计就是这么的精妙！
+ * 
+ * ------- Q2：为什么这里不用boot_map_region()?
+ * 
+ * 首先boot_map_region()是被static所修饰的，也就是说在这个文件中是“看不到”这个函数的，
+ * 自然从语法上就不能去调用这个函数。
+ * 
+ * 但是，假设我们把这个static去掉，让boot_map_region()能被调用，我们就应该用这个函数了吗？
+ * 
+ * 答案还是否定的。因为这里只是把内核的部分映射到用户的地址空间中，对于每个用户来说，内核部分
+ * 是无权修改的，且每个用户看到的这部分内容都应该是一样的，所以直接让用户去访问kern_pgdir的
+ * 对应页表即可。如果使用boot_map_region()的话，会给每个用户创建独属于自己的页表去维护这些
+ * 相同的的映射，这样会产生没必要的内存开销 (因为每个用户看到的这部分内容都是一样的！明明只需
+ * 要一份就行却创建了多个相同的副本)，而且如果这部分映射发生了变动，就需要同时修改所有的副本，
+ * 造成额外的性能开销。
+ */
 
 //
 // Allocates and initializes a new environment.
@@ -279,7 +344,53 @@ region_alloc(struct Env *e, void *va, size_t len)
 	//   'va' and 'len' values that are not page-aligned.
 	//   You should round va down, and round (va + len) up.
 	//   (Watch out for corner-cases!)
+	uint32_t cur_va = (uint32_t) ROUNDDOWN(va, PGSIZE);
+	while(cur_va < (uint32_t)((size_t)va + len)) {
+		struct PageInfo *page = page_alloc(0);
+		if(page == NULL) {
+			panic("region_alloc: page_alloc() fail\n");
+		}
+		int ret = page_insert(e->env_pgdir, page, (void*)cur_va, PTE_U | PTE_W);
+		if(ret != 0) {
+			panic("region_alloc: user page_insert() fail\n");
+		}
+		// Pages should be writable by user and kernel.
+		// 为什么明明是分配用户空间，内核也要管理这样一份副本呢？
+		// 因为我们现在还运行在内核态下，在OS从内核正式切换到用户态去执行的过程中，
+		// 内核需要对这部分用户空间进行一些操作，比如load_icode()中的memcpy，
+		// 如果不同时映射到kern_pgdir，内核就没有办法去操作这部分内存空间
+		ret = page_insert(kern_pgdir, page, (void*)cur_va, PTE_U | PTE_W);
+		if(ret != 0) {
+			panic("region_alloc: kern page_insert() fail\n");
+		}
+		cur_va += PGSIZE;
+	}
 }
+
+// 这是我之前的一个错误的写法，读者可以看看问题出在哪里，答案在函数尾给出
+static void
+WRONG_region_alloc_DONNOT_USE(struct Env *e, void *va, size_t len)
+{
+	uint32_t cur_va = (uint32_t) ROUNDDOWN(va, PGSIZE);
+	for(size_t i = 0; i < len; i += PGSIZE, cur_va += PGSIZE) {
+		struct PageInfo *page = page_alloc(0);
+		if(page == NULL) {
+			panic("region_alloc: page_alloc() fail\n");
+		}
+		int ret = page_insert(e->env_pgdir, page, (void*)cur_va, PTE_U | PTE_W);
+		if(ret != 0) {
+			panic("region_alloc: page_insert() fail\n");
+		}
+		ret = page_insert(kern_pgdir, page, (void*)cur_va, PTE_U | PTE_W);
+		if(ret != 0) {
+			panic("region_alloc: kern page_insert() fail\n");
+		}
+	}
+}
+// BUG：因为目的是要映射[va, va+len)的地址空间，这样写实际上只映射了
+// [ROUNDDOWN(va), ROUNDDOWN(va)+len)的空间，而ROUNDDOWN(va)+len在
+// 很多情况下都小于va+len，那么程序在访问ROUNDDOWN(va)+len到va+len的
+// 空间时，这部分是没有映射的，所以会发生错误。
 
 //
 // Set up the initial program binary, stack, and processor flags
@@ -309,14 +420,7 @@ load_icode(struct Env *e, uint8_t *binary)
 	// Hints:
 	//  Load each program segment into virtual memory
 	//  at the address specified in the ELF segment header.
-	//  You should only load segments with ph->p_type == ELF_PROG_LOAD.
-	//  Each segment's virtual address can be found in ph->p_va
-	//  and its size in memory can be found in ph->p_memsz.
-	//  The ph->p_filesz bytes from the ELF binary, starting at
-	//  'binary + ph->p_offset', should be copied to virtual address
-	//  ph->p_va.  Any remaining memory bytes should be cleared to zero.
-	//  (The ELF header should have ph->p_filesz <= ph->p_memsz.)
-	//  Use functions from the previous lab to allocate and map pages.
+
 	//
 	//  All page protection bits should be user read/write for now.
 	//  ELF segments are not necessarily page-aligned, but you can
@@ -335,11 +439,40 @@ load_icode(struct Env *e, uint8_t *binary)
 	//  What?  (See env_run() and env_pop_tf() below.)
 
 	// LAB 3: Your code here.
+	struct Elf * elf_hdr = (struct Elf*) binary;
+	// is this a valid ELF?
+	if (elf_hdr->e_magic != ELF_MAGIC) {
+		panic("load_icode: elf_hdr->e_magic != ELF_MAGIC\n");
+	}
+
+	struct Proghdr *ph = (struct Proghdr *) ((uint8_t *) elf_hdr + elf_hdr->e_phoff);
+	struct Proghdr *eph = ph + elf_hdr->e_phnum;
+	for (; ph < eph; ph++) {
+		//  You should only load segments with ph->p_type == ELF_PROG_LOAD.
+		if(ph->p_type == ELF_PROG_LOAD) {
+			//  Each segment's virtual address can be found in ph->p_va
+			//  and its size in memory can be found in ph->p_memsz.
+			region_alloc(e, (void*)ph->p_va, ph->p_memsz);
+			//  The ph->p_filesz bytes from the ELF binary, starting at
+			//  'binary + ph->p_offset', should be copied to virtual address ph->p_va. 
+			memcpy((void*)ph->p_va, binary + ph->p_offset, ph->p_filesz);
+			//  Any remaining memory bytes should be cleared to zero.
+			//  (The ELF header should have ph->p_filesz <= ph->p_memsz.)
+			if(ph->p_filesz > ph->p_memsz) {
+				panic("load_icode: ph->p_filesz > ph->p_memsz\n");
+			}
+			memset((void*)ph->p_va + ph->p_filesz, 0, ph->p_memsz - ph->p_filesz);
+		}
+	}
+
+	// 设置函数入口。为什么把入口设置在这里？看完env_run()和env_pop_tf()后你就知道了
+	// 详细的讲解将在env_run()后面的注释中给出
+	e->env_tf.tf_eip = (uintptr_t)elf_hdr->e_entry;
 
 	// Now map one page for the program's initial stack
 	// at virtual address USTACKTOP - PGSIZE.
-
 	// LAB 3: Your code here.
+	region_alloc(e, (void*)(USTACKTOP - PGSIZE), PGSIZE);
 }
 
 //
@@ -353,6 +486,11 @@ void
 env_create(uint8_t *binary, enum EnvType type)
 {
 	// LAB 3: Your code here.
+	struct Env * new_env;
+	if(env_alloc(&new_env, 0) != 0) {
+		panic("env_create: env_alloc(&new_env, 0) fail\n");
+	}
+	load_icode(new_env, binary);
 }
 
 //
@@ -465,18 +603,6 @@ env_pop_tf(struct Trapframe *tf)
 void
 env_run(struct Env *e)
 {
-	// Step 1: If this is a context switch (a new environment is running):
-	//	   1. Set the current environment (if any) back to
-	//	      ENV_RUNNABLE if it is ENV_RUNNING (think about
-	//	      what other states it can be in),
-	//	   2. Set 'curenv' to the new environment,
-	//	   3. Set its status to ENV_RUNNING,
-	//	   4. Update its 'env_runs' counter,
-	//	   5. Use lcr3() to switch to its address space.
-	// Step 2: Use env_pop_tf() to restore the environment's
-	//	   registers and drop into user mode in the
-	//	   environment.
-
 	// Hint: This function loads the new environment's state from
 	//	e->env_tf.  Go back through the code you wrote above
 	//	and make sure you have set the relevant parts of
@@ -484,6 +610,81 @@ env_run(struct Env *e)
 
 	// LAB 3: Your code here.
 
-	panic("env_run not yet implemented");
-}
+	// Note: if this is the first call to env_run, curenv is NULL.
+	if(curenv == NULL) {
+		// 1. Set 'curenv' to the new environment
+		curenv = e;
+		// 2. Set its status to ENV_RUNNING
+		curenv->env_status = ENV_RUNNING;
+		// 3. Use lcr3() to switch to its address space
+		lcr3(PADDR(curenv->env_pgdir));
+	}
+	// If this is a context switch (a new environment is running):
+	else if(curenv->env_id != e->env_id) {
+		// Set the current environment (if any) back to ENV_RUNNABLE if
+		// it is ENV_RUNNING (think about what other states it can be in)
+		if(curenv->env_status == ENV_RUNNING) {
+			curenv->env_status = ENV_RUNNABLE;
+		}
+		curenv = e;
+		curenv->env_status = ENV_RUNNING;
+		lcr3(PADDR(curenv->env_pgdir));
+	}
+	// Update its 'env_runs' counter
+	curenv->env_runs++;
 
+	// Use env_pop_tf() to restore the environment's
+	// registers and drop into user mode in the environment.
+	// 执行这个函数后，就会进入到用户态，并执行用户程序
+	// 但是我相信你看完env_pop_tf()一定傻眼了，明明没有函数调用call指令，
+	// 怎么就能执行用户程序了？？？解释将在这个函数后的注释中给出
+	env_pop_tf(&curenv->env_tf);
+
+	//panic("env_run not yet implemented");
+}
+/*
+ * --- env_pop_tf()到底是怎样切换到用户程序执行的？
+ *
+ * 在传统编程语言里，我们要跳转到某个地方执行，最简单直接也是用的最多的是函数调用，按理来说我们知道了程序的入口，
+ * 就可以直接通过函数调用去到那里执行，比如在boot/main.c中跳转到内核的入口执行是这样写的：
+ * 
+ * 		((void (*)(void)) (ELFHDR->e_entry))();
+ * 
+ * 但是，这样写不能满足一个极其重要的需求，也就是：
+ * 		不支持内核态到用户态的切换。普通的函数调用，不会发生特权级的切换，我们不可能直接在内核态执行用户
+ * 		程序，否则用户程序可能危害内核，所以不能直接去调用用户程序。
+ * 
+ * 所以在这里，你不能直接运行简单的用户程序的函数调用，必须借助其他手段，有没有某种机制能满足上述需求呢？
+ * 
+ * 还真有，那就是中断机制。回想一下，发生中断时，会从用户态切换到内核态，会把当前指令的下一条指令的地址保存下来，
+ * 作为中断返回后继续执行的位置；中断处理完成后，中断返回会从内核态切换到用户态，会根据之前保存下来的指令地址，
+ * 跳转到对应的地方继续执行。你想想，只要我们把中断时保存的返回地址“偷偷地”改成我们想要执行的指令的地址，那中断返回后，
+ * 是不是就直接跳转到我们想要执行的代码去执行了？并且特权级的转换也由中断指令帮我们自动完成了，不劳我们费心。
+ * 
+ * 所以，我们借助中断的机制，实现我们从内核跳转到用户代码执行的目的。env_pop_tf()中的最后一条iret就是中断返回指令。
+ * 
+ * 但是现在还是有个问题，中断机制是配套使用的，应该是由两步组成的: <发生中断><中断返回>，而现在并没有发生中断啊，
+ * 怎么能直接调用中断返回指令iret呢？其实硬件并不会检测是否真的发生了中断，当机器看到iret时，他就自动去做中断返回
+ * 对应的操作，并不关心是否真的发生了中断。所以，我们只需要人为的模拟，或者说假装发生了中断即可。
+ * 
+ * 那么现在只需要模拟发生了中断即可。发生中断时机器到底做了哪些操作？最最最简单的就是把当前指令的下一条指令的地址保存
+ * 下来，具体来说是保存到栈上面，所以我们只需要把我们想要跳转到的地址放到栈里面就行（实际上不只有返回地址，细节读者可以
+ * 自己去了解），于是乎，在load_icode()中有这么一行：
+ * 
+ * 		e->env_tf.tf_eip = (uintptr_t)elf_hdr->e_entry;
+ * 
+ * 你可能要说：“欸，这不是放到了Trapframe结构体吗？不是说好要放到栈上面吗？”别急，我们看看env_pop_tf()的输入参数：
+ * 
+ * 		env_pop_tf(&curenv->env_tf);
+ * 
+ * 然后看一眼env_pop_tf()的第一行汇编：
+ * 
+ * 		movl %0,%%esp
+ * 
+ * 这里面 %0 代表的是函数输入的第一个参数，也就是&curenv->env_tf，而esp就是栈指针寄存器。你看，这不就把栈设置成了
+ * 我们的Trapframe了吗？然后iret指令执行时，他会去esp寄存器指向的地方去找返回地址，也就是去Trapframe中找返回地址，
+ * 这样就正好找到了elf_hdr->e_entry，并跳转到那里执行。
+ * 
+ * 总算讲完了，是不是很巧妙呢 :)
+ * 
+ */
