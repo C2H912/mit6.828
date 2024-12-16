@@ -66,16 +66,21 @@ mon_backtrace(int argc, char **argv, struct Trapframe *tf)
 	uint32_t* ebp = (uint32_t*)read_ebp();
 	// 为什么边界条件是0？因为在entry.S中对ebp的首次初始化为 movl $0x0,%ebp
 	while(ebp != 0x0) {
+		cprintf("  ");
 		cprintf("ebp %x eip %x ", ebp, *(ebp + 1));	// 注意这里的1是指针的偏移，实际偏移了4字节
+		// 在Lab 3 ex 9中，运行make run-breakpoint并运行backtrace后，这里会触发page fault。
+		// 为什么？因为在访问用户栈时，ebp指针为eebfdff0，那么当*(ebp + 4)时就会访问到eebfe000，
+		// 参考memlayout.h，eebfe000是Empty Memory，不能被访问的。
 		cprintf("args %08x %08x %08x %08x %08x\n", *(ebp + 2), *(ebp + 3), *(ebp + 4), *(ebp + 5), *(ebp + 6));
 		// Lab 1 Exercise 12
 		struct Eipdebuginfo debuginfo;
 		if(!debuginfo_eip(*(ebp + 1), &debuginfo)) {
+			cprintf("\t");
 			// 注意格式要严格按照打分脚本里的格式输出，否则可能打分判断错误
 			cprintf("%s:", debuginfo.eip_file);
 			cprintf("%d: ", debuginfo.eip_line);
 			cprintf("%.*s+", debuginfo.eip_fn_namelen, debuginfo.eip_fn_name);
-			cprintf("%d\n", *(ebp + 1) - debuginfo.eip_fn_addr);
+			cprintf("%d\n\n", *(ebp + 1) - debuginfo.eip_fn_addr);
 		}
 		ebp = (uint32_t*)(*ebp);
 	}

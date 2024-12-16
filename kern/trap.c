@@ -297,6 +297,16 @@ page_fault_handler(struct Trapframe *tf)
 	// Handle kernel-mode page faults.
 
 	// LAB 3: Your code here.
+	// Hint: to determine whether a fault happened in user mode or in kernel mode, 
+	// check the low bits of the tf_cs.
+	// 参考trap()中的if ((tf->tf_cs & 3) == 3)即可。
+	// 具体解释来自env_alloc()中的注释:
+	// 		"The low 2 bits of each segment register contains the
+	//  	 Requestor Privilege Level (RPL); 3 means user mode."
+	if((tf->tf_cs & 3) != 3) {
+		print_trapframe(tf);
+		panic("page_fault_handler: a page fault happens in kernel mode\n");
+	}
 
 	// We've already handled kernel-mode exceptions, so if we get here,
 	// the page fault happened in user mode.

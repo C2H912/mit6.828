@@ -201,11 +201,25 @@ env_setup_vm(struct Env *e)
 	// set e->env_pgdir
 	e->env_pgdir = page2kva(p);	
 	// initialize the kernel portion of the new environment's address space
-	// 读者应该思考一下，为什么这里不用boot_map_region()? 答案将在这个函数结束后的注释中给出
+	/*
+	 * 这里有两个值得思考的问题：
+	 * 	  Q1：为什么要把内核的空间也映射用户的页目录表中？
+	 * 	  Q2：为什么这里不用boot_map_region()?
+	 * 答案将在本函数后的注释中给出。
+	 */
 	e->env_pgdir[PDX(UENVS)] = kern_pgdir[PDX(UENVS)];
 	e->env_pgdir[PDX(UPAGES)] = kern_pgdir[PDX(UPAGES)];
 	e->env_pgdir[PDX(KSTACKTOP-KSTKSIZE)] = kern_pgdir[PDX(KSTACKTOP-KSTKSIZE)];
-	e->env_pgdir[PDX(KERNBASE)] = kern_pgdir[PDX(KERNBASE)];
+	// 这里要牢记要映射的范围的大小到底是多少！曾经的我只写了一行：
+	// 		e->env_pgdir[PDX(KERNBASE)] = kern_pgdir[PDX(KERNBASE)];
+	// 然后访问0xf7e6aff4时就发生内核态的Page Fault了，debug了一整天 :)
+	size_t size = 0x100000000 - KERNBASE;
+	size_t total_dir_count = size / PTSIZE;	// 注意不是PGSIZE，因为是页目录表不是页表
+	size_t count = 0;
+	while(count < total_dir_count) {
+		e->env_pgdir[PDX(KERNBASE + PTSIZE * count)] = kern_pgdir[PDX(KERNBASE + PTSIZE * count)];
+		count++;
+	}
 
 	// UVPT maps the env's own page table read-only.
 	// Permissions: kernel R, user R
@@ -214,6 +228,17 @@ env_setup_vm(struct Env *e)
 	return 0;
 }
 /*
+ * ------- Q1：为什么要把内核的空间也映射用户的页目录表中？
+ * 
+ * 一句话回答就是<在某些情况下，用户需要访问内核空间中的代码或数据>。你可能会说：“让用户访问内核
+ * 不会造成安全问题吗？”当然，如果让用户“随意地”访问，肯定是不可以的。然而在某些情况下，比如说异常，
+ * 或者系统调用，用户自己是没办法处理，他就需要调用内核中的中断处理程序来协助完成工作，所以这时候，
+ * 用户是需要借助页目录表和页表帮忙访问到内核的空间的。同时，为了安全起见，这部分是只有在内核态下才
+ * 可以访问到的（页目录表和页表中的PTE位会检查权限!），平时在用户态下是没办法执行的，特权级的切换
+ * 保证了安全性。操作系统的设计就是这么的精妙！
+ * 
+ * ------- Q2：为什么这里不用boot_map_region()?
+ * 
  * 首先boot_map_region()是被static所修饰的，也就是说在这个文件中是“看不到”这个函数的，
  * 自然从语法上就不能去调用这个函数。
  * 

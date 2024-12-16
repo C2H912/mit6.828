@@ -171,11 +171,13 @@ mem_init(void)
 	// Lab 2 Exercise 1 
 	// 注意，这里必须加上struct，不能只写PageInfo，因为这里是C语言而不是C++ :)
 	pages = (struct PageInfo *) boot_alloc(sizeof(struct PageInfo) * npages);
+	memset(pages, 0, sizeof(struct PageInfo) * npages);
 
 	//////////////////////////////////////////////////////////////////////
 	// Make 'envs' point to an array of size 'NENV' of 'struct Env'.
 	// LAB 3: Your code here. Exercise 1
 	envs = (struct Env *) boot_alloc(sizeof(struct Env) * NENV);
+	memset(envs, 0, sizeof(struct Env) * NENV);
 
 	//////////////////////////////////////////////////////////////////////
 	// Now that we've allocated the initial kernel data structures, we set
@@ -482,8 +484,10 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 	size_t total_pg_num = size / PGSIZE;	// 一共需要映射的页数
 	size_t cur_pg_num = 0;					// 当前已经映射的页数
 	while(cur_pg_num < total_pg_num) {
-		// 这里为什么要这样写？因为我们无法保证要映射的区域都在同一个页表中
 		pte_t *pte = pgdir_walk(pgdir, (void*)va, 1);
+		if(pte == NULL) {
+			panic("boot_map_region: pgdir_walk fail\n");
+		}
 		*pte = pa | perm | PTE_P;
 		va += PGSIZE;
 		pa += PGSIZE;
@@ -634,6 +638,37 @@ int
 user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 {
 	// LAB 3: Your code here.
+	uint32_t start, cur;
+	start = cur = (uint32_t)ROUNDDOWN((uint32_t)va, PGSIZE);
+	uint32_t end = (uint32_t)ROUNDUP((uint32_t)va + len, PGSIZE);
+	user_mem_check_addr = 0;
+	for(; cur < (uint32_t)ROUNDUP((uint32_t)va + len, PGSIZE); cur += PGSIZE) {
+		// if the address is below ULIM
+		if(cur + PGSIZE - 1 >= ULIM) {
+			user_mem_check_addr = cur;
+			if(user_mem_check_addr == start) {
+				user_mem_check_addr = (uintptr_t)va;
+			}
+			return -E_FAULT;
+		}
+		pte_t *pte_store = pgdir_walk(kern_pgdir, (void*)cur, 0);
+		// 当前页不存在
+		if(pte_store == NULL) {
+			user_mem_check_addr = cur;
+			if(user_mem_check_addr == start) {
+				user_mem_check_addr = (uintptr_t)va;
+			}
+			return -E_FAULT;
+		}
+		// the page table gives it permission
+		if(((*pte_store & 0x0fff) & (perm | PTE_P)) != (perm | PTE_P)) {
+			user_mem_check_addr = cur;
+			if(user_mem_check_addr == start) {
+				user_mem_check_addr = (uintptr_t)va;
+			}
+			return -E_FAULT;
+		}
+	}
 
 	return 0;
 }
