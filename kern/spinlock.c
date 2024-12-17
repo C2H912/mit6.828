@@ -68,6 +68,12 @@ spin_lock(struct spinlock *lk)
 	// The xchg is atomic.
 	// It also serializes, so that reads after acquire are not
 	// reordered before it. 
+	// xchg还可以进去看看。
+	// 我个人的理解是，xchg的作用是原子地交换第一个和第二个参数的值，并返回第一个参数原来的值。
+	//   case 1: 当lk->locked值为0时(没上锁)，操作后lk->locked值为1，表明已上锁，同时返回原来
+	// 			 的值0，while条件不成立，退出while，顺利执行之后的代码。
+	//   case 2: 当lk->locked值为1时(已上锁)，操作后lk->locked值为1，表明已上锁，同时返回原来
+	//           的值1，while条件成立，进入while循环，执行pause，无法执行后续临界区代码。
 	while (xchg(&lk->locked, 1) != 0)
 		asm volatile ("pause");
 

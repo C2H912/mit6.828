@@ -583,6 +583,10 @@ env_pop_tf(struct Trapframe *tf)
 	// Record the CPU we are running on for user-space debugging
 	curenv->env_cpunum = cpunum();
 
+	// 因为执行iret后会从内核态切回用户态继续执行用户代码了，所以这里是释放锁的最晚时机。
+	// 读者应该自行检查一下，是否所有的lock_kernel()代码最后都能执行到这里。
+	unlock_kernel();
+
 	asm volatile(
 		"\tmovl %0,%%esp\n"
 		"\tpopal\n"
