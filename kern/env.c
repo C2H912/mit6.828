@@ -223,6 +223,10 @@ env_setup_vm(struct Env *e)
 		e->env_pgdir[PDX(KERNBASE + PTSIZE * count)] = kern_pgdir[PDX(KERNBASE + PTSIZE * count)];
 		count++;
 	}
+	// 在Lab 4之前，不写这一句都是OK的，因为没有用到Memory-mapped I/O中的东西。
+	// 但是Lab 4后，MMIO中的东西就被用上了，比如cpunum()的代码要访问lapic，而lapic是在MMIO中的，
+	// 所以要加入这条映射。这个bug又花了我一天的时间 :(
+	e->env_pgdir[PDX(MMIOBASE)] = kern_pgdir[PDX(MMIOBASE)];
 
 	// UVPT maps the env's own page table read-only.
 	// Permissions: kernel R, user R
@@ -616,12 +620,8 @@ env_run(struct Env *e)
 
 	// Note: if this is the first call to env_run, curenv is NULL.
 	if(curenv == NULL) {
-		// 1. Set 'curenv' to the new environment
+		// Set 'curenv' to the new environment
 		curenv = e;
-		// 2. Set its status to ENV_RUNNING
-		curenv->env_status = ENV_RUNNING;
-		// 3. Use lcr3() to switch to its address space
-		lcr3(PADDR(curenv->env_pgdir));
 	}
 	// If this is a context switch (a new environment is running):
 	else if(curenv->env_id != e->env_id) {
@@ -631,11 +631,18 @@ env_run(struct Env *e)
 			curenv->env_status = ENV_RUNNABLE;
 		}
 		curenv = e;
-		curenv->env_status = ENV_RUNNING;
-		lcr3(PADDR(curenv->env_pgdir));
 	}
 	// Update its 'env_runs' counter
 	curenv->env_runs++;
+
+	// 注意!!!
+	// Lab 4必须将这两句移动到这里，因为从sched_yield()进来的情况下，
+	// 上面的两个if都不会执行！如果不注意到这个细节，那么就enjoy dubugging吧 :)
+	curenv->env_status = ENV_RUNNING;	// Set its status to ENV_RUNNING
+	lcr3(PADDR(curenv->env_pgdir));	 // Use lcr3() to switch to its address space
+
+	// 实现"谁启动谁完成"的语意，详见sched_yield()的case 2
+	curenv->env_cpunum = cpunum();
 
 	// Use env_pop_tf() to restore the environment's
 	// registers and drop into user mode in the environment.
