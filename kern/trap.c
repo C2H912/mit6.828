@@ -244,7 +244,7 @@ trap_dispatch(struct Trapframe *tf)
 		 * 这里很精妙，读者可以思考一下为什么syscall的参数是这些，答案在trap_dispatch()结尾注释给出
 		 */
 		int32_t ret = syscall(tf->tf_regs.reg_eax, tf->tf_regs.reg_edx, tf->tf_regs.reg_ecx, 
-							  tf->tf_regs.reg_ebx,tf->tf_regs.reg_edx, tf->tf_regs.reg_esi);
+							  tf->tf_regs.reg_ebx, tf->tf_regs.reg_edi, tf->tf_regs.reg_esi);
 		if(ret < 0) {
 			break;
 		}
