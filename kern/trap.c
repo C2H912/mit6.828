@@ -409,10 +409,255 @@ page_fault_handler(struct Trapframe *tf)
 
 	// LAB 4: Your code here.
 
+	/* 
+	 * !!! 在你开始这个实验之前，请确保自己能完全理解Lab 3中的中断返回的机制(iret) !!!
+	 *
+	 * Lab 4 ex 9 ~ 10是个人感觉高难且易错的部分，我尽量给大家讲清楚这部分，
+	 * 各位可以自己先尝试一下，suffer from debugginnnnnng XD，讲解将在本函数尾给出。
+	 */
+
+	if(curenv->env_pgfault_upcall != NULL) {
+		user_mem_assert(curenv, (void*)(UXSTACKTOP - PGSIZE), PGSIZE, PTE_P | PTE_U | PTE_W);
+
+		uint32_t *uxstack_ptr = NULL;
+		// (1) tf_esp < USTACKTOP说明是从用户栈首次切换到异常栈，所以要将esp更新为异常栈的开始
+		if(curenv->env_tf.tf_esp < USTACKTOP) {
+			uxstack_ptr = (uint32_t*)(UXSTACKTOP - 4);	// 注意这里是减去4个字节
+			*uxstack_ptr = curenv->env_tf.tf_esp - 4;	// 注意要预留一个32-bit word用于存放返回地址
+		}
+		// (2) 当前已经在异常栈上了，又发生了page fault，也就是异常的嵌套，直接在异常栈
+		//     上开启一个新的栈帧，curenv->env_tf.tf_esp即指向了异常栈的栈顶
+		else {
+			uxstack_ptr = (uint32_t*)curenv->env_tf.tf_esp;
+			uxstack_ptr -= 2;							// 注意要预留一个32-bit word用于存放返回地址
+			*uxstack_ptr = curenv->env_tf.tf_esp - 4;
+		}
+
+		// 压入struct UTrapframe
+		*(uxstack_ptr - 1) = curenv->env_tf.tf_eflags;
+		*(uxstack_ptr - 2) = curenv->env_tf.tf_eip;
+
+		*(uxstack_ptr - 3) = curenv->env_tf.tf_regs.reg_eax;
+		*(uxstack_ptr - 4) = curenv->env_tf.tf_regs.reg_ecx;
+		*(uxstack_ptr - 5) = curenv->env_tf.tf_regs.reg_edx;
+		*(uxstack_ptr - 6) = curenv->env_tf.tf_regs.reg_ebx;
+		*(uxstack_ptr - 7) = curenv->env_tf.tf_regs.reg_oesp;
+		*(uxstack_ptr - 8) = curenv->env_tf.tf_regs.reg_ebp;
+		*(uxstack_ptr - 9) = curenv->env_tf.tf_regs.reg_esi;
+		*(uxstack_ptr - 10) = curenv->env_tf.tf_regs.reg_edi;
+
+		*(uxstack_ptr - 11) = curenv->env_tf.tf_err;
+		*(uxstack_ptr - 12) = fault_va;
+		
+		// 参考官方文档："fault_va   <-- %esp when handler is run"
+		curenv->env_tf.tf_esp = (uintptr_t)(uxstack_ptr - 12);
+		// 设置中断返回后的用户程序入口
+		curenv->env_tf.tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
+		
+		env_run(curenv);
+	}
+
 	// Destroy the environment that caused the fault.
 	cprintf("[%08x] user fault va %08x ip %08x\n",
 		curenv->env_id, fault_va, tf->tf_eip);
 	print_trapframe(tf);
 	env_destroy(curenv);
 }
-
+/*
+ * --------------- Lab 4 ex 9讲解 
+ *
+ * 首先，我们要知道这里到底要我们实现什么东西，也就是
+ * 		User-level page fault handling
+ * 以往每次发生页错误时，都触发中断，然后交给内核的中断处理程序去处理错误。
+ * 然而，我们可以把如何去处理的权力交给用户，让用户自己决定到底该怎么处理页错误，
+ * 这样会有非常大的灵活性。
+ * 
+ * 那么怎么去实现这个功能呢？我们可以先回顾一下传统上的内核处理的流程：
+ * 
+ * 		1. 用户执行到错误代码，触发中断
+ *  	2. 内核响应中断，用户态切换到内核态，用户栈切换到内核栈
+ *  	3. 各种信息 (struct Trapframe) 保存到内核栈中
+ *  	4. 运行内核中写好的中断处理程序
+ *  	5. 中断返回，内核态切换回用户态，内核栈切换回用户栈，恢复用户程序出错时状态
+ * 	 	6. 用户程序继续运行下一条指令
+ * 
+ * 一眼看过去好像只需要把第4步改成调用用户自定义的处理程序就好了，多简单~
+ * 但是！现在是处于内核态中的，也就是说这时候运行的程序具有极高的权限，而我们运行
+ * 的又是用户程序，如果用户程序故意写一段清空磁盘的代码，那么...
+ * 
+ * 所以，正确的流程大概是这个样子的 (暂时) :
+ * 
+ * 		1. 用户执行到错误代码，触发中断
+ *  	2. 内核响应中断，用户态切换到内核态，用户栈切换到内核栈
+ *  	3. 各种信息 (struct Trapframe) 保存到内核栈中
+ *  	4. 中断返回，内核态切换回用户态，内核栈切换回用户栈，恢复用户程序出错时状态
+ * 		5. < 运行用户自定义的处理程序 >
+ * 	 	6. 用户程序继续运行下一条指令
+ * 
+ * 这样前面5步看起来都没有任何问题，但是不能顺利执行第6步了 :( ，为什么？因为
+ * 我们需要先还原各种寄存器的状态，才能继续执行下一条指令。而我们在第3步中保存的状态
+ * 在第4步时已经把它们还原到寄存器上了，然后第5步运行处理程序时，肯定会把寄存器的状态
+ * 破坏掉，这样第6步就没法运行了。
+ * 
+ * 所以，我们需要把第3步中保存下来的信息，转存到某个地方，这样在第5步执行完成后，用
+ * 它们来恢复寄存器的状态。正确的流程大概是这个样子的：
+ * 
+ * 		1. 用户执行到错误代码，触发中断
+ *  	2. 内核响应中断，用户态切换到内核态，用户栈切换到内核栈
+ *  	3. 各种信息 (struct Trapframe) 保存到内核栈中，< 并转存到某个用户可以访问到的地方 >
+ *  	4. 中断返回，内核态切换回用户态，内核栈切换回用户栈
+ * 		5. < 运行用户自定义的处理程序，运行完成后恢复出错时的状态 > 
+ * 	 	6. 用户程序继续运行下一条指令
+ * 
+ * 具体来说，"某个用户可以访问到的地方"就是用户异常栈(见memlayout.h中的User Exception Stack)，
+ * 而保存下来的信息我们不用struct Trapframe，而是用struct UTrapframe。这下你回看上面的代码，
+ * 其实就很清晰了，无非就是将Trapframe的东西拷贝到User Exception Stack中，使这个Stack看起来是
+ * 一个UTrapframe结构体，然后更改Trapframe中的tf_esp和tf_eip，通过iret机制跳到用户处理程序和
+ * Exception Stack中执行而已。有个边界条件就是要区分一下是首次page fault还是page fault嵌套。
+ * 至于如何恢复出错时的状态，继续运行下一条指令，就是ex 10的内容了。
+ * 
+ * 最后，你会发现一些"奇怪"的代码，比如：
+ * 		*uxstack_ptr = curenv->env_tf.tf_esp - 4;
+ * 为什么不是*uxstack_ptr = curenv->env_tf.tf_esp而是还要减4呢？这就是ex 10中精妙的地方了!
+ * 
+ * 
+ * --------------- Lab 4 ex 10讲解 
+ * 
+ * 书接上回，我们在第5步时会跳到用户自定义的处理程序中执行，也就是pfentry.S中的_pgfault_upcall，
+ * 当然，实际的处理程序是在_pgfault_handler中，_pgfault_upcall一开始无非就是call了一下_pgfault_handler，
+ * 处理程序结束后，自然就是恢复出错时的状态，继续运行下一条指令，这就是ex 10要求我们完成的东西。
+ * 
+ * 要恢复哪些东西？显然是struct PushRegs，eflags和esp。怎么恢复？pop出来或mov就可以了。
+ * 
+ * 怎么继续运行下一条指令？对于中断返回来说，设置tf_eip然后iret就可以了；但是对于用户处理程序来说，因为现在
+ * 是在用户态，自然就不能借助iret指令了。那么我们可以想到跳转指令，比如jmp，然而...
+ * 
+ *  	"We can't call 'jmp', since that requires that we load the address into a register, 
+ * 		 and all registers must have their trap-time values after the return."
+ * 
+ * 意思就是如果使用jmp，那么会改变我们刚才已经恢复好的寄存器的状态，也就是跳转虽然成功了，但是寄存器的值
+ * 又无效了...
+ * 
+ * 所以现在难就难在，怎么在不破坏已经恢复好的寄存器值的前提下，实现跳转？官方也是这么说的：
+ * 		
+ * 		"The interesting part is returning to the original point in the user code that caused 
+ * 		 the page fault. You'll return directly there, without going back through the kernel. 
+ * 		 The hard part is simultaneously switching stacks and re-loading the EIP."
+ * 
+ * "switching stacks"意思就是指把esp寄存器的值设置为正确的栈顶。
+ * 
+ * 提示：使用ret指令。ret指令主要做了两件事：
+ * 		1. 将当前esp指向的栈顶的内容赋值给eip寄存器
+ * 		2. esp++
+ * 
+ * 下面我将用"动画"的形式讲解下关键思想，请不要在意各种实现的细节：
+ * 
+ * <时刻1. 用户程序发生page fault>			<时刻2. 用户处理程序开始运行>	
+ * 
+ * 				内存
+ * 			+--------------+					+--------------+
+ * 			|              |					|              |			   
+ * 			|用户正常使用   | 					 |用户正常使用   |
+ *			|的栈          |				    | 的栈          | 
+ * 			|--------------|<----原esp			|--------------|
+ * 			|			   |					|留空的4字节    |
+ * 			|			   |					|--------------|
+ * 			|              |					|异常栈         |
+ * 			|              |					|UTrapFrame    |
+ * 			| NULL /////// |					|			   |
+ * 			|			   |					|--------------|<----现esp
+ * 			|              |					| NULL /////// |
+ * 			|--------------|					|--------------|
+ * 			|用户处理程序   |					 |用户处理程序   |<----现eip
+ * 			|              |					|			   |
+ * 			|--------------|					|--------------|
+ * 			|发生错误时的   |<----原eip			 |发生错误时的   |
+ * 			|代码          |					| 代码          |
+ * 			|              |					|			   |
+ *          +—-------------+					+--------------+
+ * 
+ * <时刻3. 用户处理程序完成，pfrentry.S中刚执行完addl $4, %esp>	
+ * 
+ * 				内存
+ * 			+--------------+					
+ * 			|              |							   
+ * 			|用户正常使用   | 					 
+ *			|的栈          |				     
+ * 			|--------------|		
+ * 			|留空的4字节	|				
+ * 			|--------------|					
+ * 			|异常栈         |					
+ * 			|UTrapFrame    |			
+ * 			|--------------|<----现esp						
+ * 			|NULL ///////  |				
+ * 			|--------------|					
+ * 			|用户处理程序   |		eip现在指向	addl $4, %esp之后的第一条汇编	
+ * 			|              |					
+ * 			|--------------|					
+ * 			|发生错误时的   |		
+ * 			|代码          |					
+ * 			|              |					
+ *          +—-------------+
+ * 
+ * <时刻4. pfrentry.S中执行到addl $8, %esp>	
+ * 
+ * 				内存
+ * 			+--------------+					
+ * 			|              |							   
+ * 			|用户正常使用   | 					 
+ *			|的栈           |				     
+ * 			|--------------|		
+ * 			|原eip值    	|				
+ * 			|--------------|					
+ * 			|异常栈         |					
+ * 			|UTrapFrame    |			
+ * 			|--------------|<----现esp						
+ * 			|NULL ///////  |				
+ * 			|--------------|					
+ * 			|用户处理程序   |		eip现在指向	addl $8, %esp	
+ * 			|              |					
+ * 			|--------------|					
+ * 			|发生错误时的   |		
+ * 			|代码           |					
+ * 			|              |					
+ *          +—-------------+
+ * 
+ * <时刻5. pfrentry.S中执行到ret>
+ * 注意！这时候已经把UTrapFrame中PushRegs和eflags的值还原好了，
+ * 但esp并没有！对比时刻1的图你会发现，现esp与原esp差了4字节。
+ * 
+ * 				内存
+ * 			+--------------+					
+ * 			|              |							   
+ * 			|用户正常使用   | 					 
+ *			|的栈           |				     
+ * 			|--------------|		
+ * 			|原eip值    	|				
+ * 			|--------------|<----现esp					
+ * 			|              |					
+ * 			|NULL ///////  |			
+ * 			|              |						
+ * 			|			   |				
+ * 			|--------------|					
+ * 			|用户处理程序   |		eip现在指向	ret	
+ * 			|              |					
+ * 			|--------------|					
+ * 			|发生错误时的   |		
+ * 			|代码           |					
+ * 			|              |					
+ *          +—-------------+
+ * 
+ * <时刻6. 执行ret，魔法发生！>
+ * ret指令第一步先将当前esp指向的栈顶的内容赋值给eip寄存器，观察时刻5的图，你会发现这正好
+ * 把原eip的值赋值给了eip寄存器，也就是eip寄存器现在指向了时刻1图中"原eip"的地方！
+ * 
+ * ret指令第二步把现在的esp++，正好往上移动4字节，这不正好回到了时刻1图中"原esp"的地方？！
+ * 
+ * 这样，通过一条ret指令，就实现了"simultaneously switching stacks and re-loading the EIP"
+ * 
+ * 这下，时刻6之后是不是变回了时刻1时候的状态了？并且所有寄存器的值都被还原了，这不就实现了
+ * 		"恢复出错时的状态，继续运行下一条指令"
+ * 的要求了吗？
+ * 
+ * 操作系统实在太神奇了(笑		
+ */

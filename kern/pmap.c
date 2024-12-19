@@ -741,7 +741,7 @@ user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 			}
 			return -E_FAULT;
 		}
-		pte_t *pte_store = pgdir_walk(kern_pgdir, (void*)cur, 0);
+		pte_t *pte_store = pgdir_walk(env->env_pgdir, (void*)cur, 0);
 		// 当前页不存在
 		if(pte_store == NULL) {
 			user_mem_check_addr = cur;
