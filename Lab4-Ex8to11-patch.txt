@@ -1,0 +1,69 @@
+在做完Lab 4 ex 8~11后 (也就是在"Lab 4 ex 8~11 complete"的commit后), 虽然官方
+文档 https://pdos.csail.mit.edu/6.828/2018/labs/lab4/ 中提到的Run user/faultread,
+faultdie, faultalloc, faultallocbad都正确运行了, 但还有些打分程序没有通过, 所以现在
+针对这些问题做一些修正。
+
+
+1. faultregs
+
+打分程序运行结果如下:
+       before   during  
+edi    00000000 00000000 OK
+esi    00000000 00000000 OK
+ebp    eebfdfd0 eebfdfd0 OK
+ebx    00000000 00000000 OK
+edx    00001000 00001000 OK
+ecx    00801319 00801319 OK
+eax    008003e4 008003e4 OK
+eip    00800522 00800522 OK
+eflags 000008d7 000008d7 OK
+esp    eebfdfb8 eebfdfb4 <---------- 之前的问题出在这里
+Registers in UTrapframe OK
+       before   after   
+edi    00000000 00000000 OK
+esi    00000000 00000000 OK
+ebp    eebfdfd0 eebfdfd0 OK
+ebx    00000000 00000000 OK
+edx    00001000 00001000 OK
+ecx    00801319 00801319 OK
+eax    008003e4 008003e4 OK
+eip    00800522 00800522 OK
+eflags 000008d7 000008d7 OK
+esp    eebfdfb8 eebfdfb8 OK
+
+可以看到, UTrapframe中esp差了四个字节, 其实这并不是什么问题, 只是具体的实现方式的选择而已。
+
+因为page fault处理程序返回的原理是往栈顶上预留的四字节空间中压入返回地址, 然后让esp指针指向这个返回地址。
+在我之前的实现中, 我在将esp保存到UTrapframe时, 就提前减去了这四个字节的偏移, 也就是:
+    *uxstack_ptr = curenv->env_tf.tf_esp - 4;
+这样, 我在pfrntry.S中就不用再手动减去4字节偏移了。
+
+当然, 你也可以在将esp保存到UTrapframe时, 不理会这个偏移, 到了pfrntry.S时再去处理, 官方的意思就是这样。
+无论是哪种实现方式，结果是一样的。不过，官方的意思更符合"语意", 或者说"概念"吧, 毕竟UTrapframe的意思就是
+保留之前的状态, esp该指向哪里就是哪里, 差了四个字节可能让人迷惑。所以这次commit对相关代码做了对应修改。
+
+
+2. faultbadhandler以及faultevilhandler
+
+看了一下这两个文件的代码, 原来是故意传入一个错误的handler地址, 这确实是一个很重要的问题, 之前没有考虑到。
+
+
+3. faultnostack
+
+在之前的实现中，我只做了这个检查：
+    user_mem_assert(curenv, (void*)(UXSTACKTOP - PGSIZE), PGSIZE, PTE_P | PTE_U | PTE_W);
+这个检查只能检查是否有分配异常栈，不能处理异常栈溢出的情况。当异常栈溢出时，我们会访问到异常栈下面的
+    Empty Memory (*)
+这是一个不合法的内存访问, 又会触发page fault, 然后user_mem_assert又会通过, 进而执行到下面的
+    *(uxstack_ptr - ...) = ...
+这时因为(uxstack_ptr - ...)肯定指向的是Empty Memory, 访问它又会page fault, 于是乎, 在双重page fault
+下，代码最终执行到:
+    if((tf->tf_cs & 3) != 3) {
+		print_trapframe(tf);
+		panic("page_fault_handler: a page fault happens in kernel mode\n");
+	}
+然后系统崩溃。
+
+所以现在改成:
+    user_mem_assert(curenv, (void*)(uxstack_ptr - 12), 13 * 4, PTE_P | PTE_U | PTE_W);
+这样当栈溢出访问到Empty Memory时, 这里就能检查出来把用户进程杀掉, 防止系统崩溃。

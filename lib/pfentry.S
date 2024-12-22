@@ -67,7 +67,9 @@ _pgfault_upcall:
 	// LAB 4: Your code here.
 	movl 40(%esp), %eax		// 取出trap-time %eip
 	movl 48(%esp), %ebx		// 取出trap-time %esp
-	movl %eax, (%ebx)		// 把eip存到上一个栈帧的栈顶预留出来的空间中
+	subl $4, %ebx			// 把%ebx下移4个字节，指向上一个栈帧的栈顶预留出来的空间中
+	movl %eax, (%ebx)		// 把eip(返回地址)存到上一个栈帧的栈顶预留出来的空间中
+	movl %ebx, 48(%esp)		// 别忘了也要让上一个栈帧的栈顶指针下移4个字节，让它指向返回地址
 
 
 	// Restore the trap-time registers.  After you do this, you

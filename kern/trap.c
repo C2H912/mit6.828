@@ -417,23 +417,24 @@ page_fault_handler(struct Trapframe *tf)
 	 */
 
 	if(curenv->env_pgfault_upcall != NULL) {
-		user_mem_assert(curenv, (void*)(UXSTACKTOP - PGSIZE), PGSIZE, PTE_P | PTE_U | PTE_W);
 
 		uint32_t *uxstack_ptr = NULL;
 		// (1) tf_esp < USTACKTOP说明是从用户栈首次切换到异常栈，所以要将esp更新为异常栈的开始
 		if(curenv->env_tf.tf_esp < USTACKTOP) {
 			uxstack_ptr = (uint32_t*)(UXSTACKTOP - 4);	// 注意这里是减去4个字节
-			*uxstack_ptr = curenv->env_tf.tf_esp - 4;	// 注意要预留一个32-bit word用于存放返回地址
 		}
 		// (2) 当前已经在异常栈上了，又发生了page fault，也就是异常的嵌套，直接在异常栈
 		//     上开启一个新的栈帧，curenv->env_tf.tf_esp即指向了异常栈的栈顶
 		else {
 			uxstack_ptr = (uint32_t*)curenv->env_tf.tf_esp;
 			uxstack_ptr -= 2;							// 注意要预留一个32-bit word用于存放返回地址
-			*uxstack_ptr = curenv->env_tf.tf_esp - 4;
 		}
 
+		// 检查当前我们要写入UTrapframe的内存的合法性
+		user_mem_assert(curenv, (void*)(uxstack_ptr - 12), 13 * 4, PTE_P | PTE_U | PTE_W);
+
 		// 压入struct UTrapframe
+		*uxstack_ptr = curenv->env_tf.tf_esp;
 		*(uxstack_ptr - 1) = curenv->env_tf.tf_eflags;
 		*(uxstack_ptr - 2) = curenv->env_tf.tf_eip;
 
@@ -451,7 +452,8 @@ page_fault_handler(struct Trapframe *tf)
 		
 		// 参考官方文档："fault_va   <-- %esp when handler is run"
 		curenv->env_tf.tf_esp = (uintptr_t)(uxstack_ptr - 12);
-		// 设置中断返回后的用户程序入口
+		// 检查用户程序入口合法性，设置中断返回后的用户程序入口
+		user_mem_assert(curenv, (void*)(curenv->env_pgfault_upcall), PGSIZE, PTE_P | PTE_U);
 		curenv->env_tf.tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
 		
 		env_run(curenv);
