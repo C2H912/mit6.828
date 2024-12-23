@@ -25,7 +25,6 @@ vcprintf(const char *fmt, va_list ap)
 	return cnt;
 }
 
-// 对外提供的函数接口，专门处理可变参数
 int
 cprintf(const char *fmt, ...)
 {
