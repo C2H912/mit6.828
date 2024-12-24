@@ -350,7 +350,68 @@ static int
 sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
 {
 	// LAB 4: Your code here.
-	panic("sys_ipc_try_send not implemented");
+	//panic("sys_ipc_try_send not implemented");
+	struct Env *env;
+	int ret = envid2env(envid, &env, 0);
+	// if environment envid doesn't currently exist.
+	if(ret < 0) {
+		return -E_BAD_ENV;
+	}
+	// if envid is not currently blocked in sys_ipc_recv,
+	// or another environment managed to send first.
+	if(env->env_ipc_recving != true) {
+		return -E_IPC_NOT_RECV;
+	}
+
+	// 注意，只有当srcva < UTOP && dstva < UTOP时才需要传递页
+	if((uint32_t)srcva < UTOP && (uint32_t)env->env_ipc_dstva < UTOP) {
+		// if srcva < UTOP but srcva is not page-aligned.
+		if((uint32_t)srcva % PGSIZE != 0) {
+			return -E_INVAL;
+		}
+		// if srcva < UTOP and perm is inappropriate
+		if((perm & (PTE_U | PTE_P)) != (PTE_U | PTE_P)) {
+			return -E_INVAL;	// PTE_U | PTE_P must be set
+		}
+		if((perm | PTE_SYSCALL) != PTE_SYSCALL) {
+			return -E_INVAL;	// no other bits may be set
+		}
+		// if srcva < UTOP but srcva is not mapped in the caller's address space.
+		pte_t *pte = pgdir_walk(curenv->env_pgdir, srcva, 0);
+		if(pte == NULL) {
+			return -E_INVAL;
+		}
+		// if (perm & PTE_W), but srcva is read-only in the current environment's address space.
+		if(perm & PTE_W) {
+			if((*pte & PTE_W) != PTE_W) {
+				return -E_INVAL;
+			}
+		}
+		// if there's not enough memory to map srcva in envid's address space.
+		pte_t *dst_pte = pgdir_walk(env->env_pgdir, env->env_ipc_dstva, 1);
+		if(dst_pte == NULL) {
+			return -E_NO_MEM;
+		}
+		
+		*dst_pte = ((*pte) & 0xfffff000) | perm;
+		env->env_ipc_perm = perm;
+	}
+	// If the sender wants to send a page but the receiver isn't asking for one,
+	// then no page mapping is transferred, but no error occurs.
+	else if((uint32_t)srcva < UTOP && (uint32_t)env->env_ipc_dstva >= UTOP) {
+		env->env_ipc_perm = 0;
+	}
+	else {
+		env->env_ipc_perm = 0;
+	}
+
+	env->env_ipc_recving = false;
+	env->env_ipc_from = curenv->env_id;
+	env->env_ipc_value = value;
+	env->env_status = ENV_RUNNABLE;
+	// 这句话很关键。保证了等待接收的进程再次被调度时，得到返回值0。
+	env->env_tf.tf_regs.reg_eax = 0;
+	return 0;
 }
 
 // Block until a value is ready.  Record that you want to receive
@@ -368,7 +429,22 @@ static int
 sys_ipc_recv(void *dstva)
 {
 	// LAB 4: Your code here.
-	panic("sys_ipc_recv not implemented");
+	//panic("sys_ipc_recv not implemented");
+	if((uint32_t)dstva < UTOP && ((uint32_t)dstva % PGSIZE != 0)) {
+		return -E_INVAL;
+	}
+
+	// 只有当dstva < UTOP，才表明想要接受一个页
+	if((uint32_t)dstva < UTOP) {
+		curenv->env_ipc_dstva = dstva;
+	}
+	else {
+		curenv->env_ipc_dstva = (void*)UTOP;
+	}
+
+	curenv->env_ipc_recving = true;
+	curenv->env_status = ENV_NOT_RUNNABLE;
+	sched_yield();
 	return 0;
 }
 
@@ -388,34 +464,29 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 		break;
 	case SYS_cgetc:
 		return sys_cgetc();
-		break;
 	case SYS_getenvid:
 		return sys_getenvid();
-		break;
 	case SYS_env_destroy:
 		return sys_env_destroy((envid_t)a1);
-		break;
 	case SYS_yield:
 		sys_yield();
 		break;
 	case SYS_exofork:
 		return sys_exofork();
-		break;
 	case SYS_env_set_status:
 		return sys_env_set_status((envid_t)a1, (int)a2);
-		break;
 	case SYS_env_set_pgfault_upcall:
 		return sys_env_set_pgfault_upcall((envid_t)a1, (void*)a2);
-		break;
 	case SYS_page_alloc:
 		return sys_page_alloc((envid_t)a1, (void*)a2, (int)a3);
-		break;
 	case SYS_page_map:
 		return sys_page_map((envid_t)a1, (void*)a2, (envid_t)a3, (void*)a4, (int)a5);
-		break;
 	case SYS_page_unmap:
 		return sys_page_unmap((envid_t)a1, (void*)a2);
-		break;
+	case SYS_ipc_try_send:
+		return sys_ipc_try_send((envid_t)a1, (uint32_t)a2, (void*)a3, (unsigned int)a4);
+	case SYS_ipc_recv:
+		return sys_ipc_recv((void*)a1);
 	case NSYSCALLS:
 		break;
 	default:

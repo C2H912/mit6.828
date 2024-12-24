@@ -267,6 +267,7 @@ trap_dispatch(struct Trapframe *tf)
 {
 	// Handle processor exceptions.
 	// LAB 3: Your code here.
+	int ret;
 	switch (tf->tf_trapno) {
 	case T_BRKPT:
 		monitor(tf);	// 注意中断向量表中T_BRKPT的DPL要改为3
@@ -284,7 +285,7 @@ trap_dispatch(struct Trapframe *tf)
 		/*
 		 * 这里很精妙，读者可以思考一下为什么syscall的参数是这些，答案在trap_dispatch()结尾注释给出
 		 */
-		int32_t ret = syscall(tf->tf_regs.reg_eax, tf->tf_regs.reg_edx, tf->tf_regs.reg_ecx, 
+		ret = syscall(tf->tf_regs.reg_eax, tf->tf_regs.reg_edx, tf->tf_regs.reg_ecx, 
 							  tf->tf_regs.reg_ebx, tf->tf_regs.reg_edi, tf->tf_regs.reg_esi);
 		if(ret < 0) {
 			break;
@@ -293,6 +294,15 @@ trap_dispatch(struct Trapframe *tf)
 		return;		// 成功的话返回用户执行
 	default:
 		break;
+	}
+
+	// 这是一个special case，因为我们在lib/ipc.c的ipc_send()中是要让sys_ipc_try_send()
+	// 反复执行直到成功，如果不写这几句的话，一次失败就直接env_destroy()了。
+	if(tf->tf_trapno == T_SYSCALL && tf->tf_regs.reg_eax == SYS_ipc_try_send) {
+		if(ret == -7) {
+			tf->tf_regs.reg_eax = ret;
+			return;
+		}
 	}
 
 	// Handle spurious interrupts
