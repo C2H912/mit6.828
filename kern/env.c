@@ -316,6 +316,7 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 
 	// Enable interrupts while in user mode.
 	// LAB 4: Your code here.
+	e->env_tf.tf_eflags |= FL_IF;
 
 	// Clear the page fault handler until user installs one.
 	e->env_pgfault_upcall = 0;
@@ -564,6 +565,17 @@ env_destroy(struct Env *e)
 	if (e->env_status == ENV_RUNNING && curenv != e) {
 		e->env_status = ENV_DYING;
 		return;
+	}
+
+	// 在env_free(e)之前，把e所有的僵死子进程的资源先free掉。
+	//
+	// 写这几句的本意是：在执行spin.c时我发现父进程执行sys_env_destroy(env);后，子进程被标记为僵死进程，
+	// 但还没有env_free子进程，这时父进程执行完成后就自己退出了(也就是destroy + free)，那么就出现了无人
+	// 回收子进程内核资源的情况，所以这里补充了这几句。
+	for(size_t i = 0; i < NENV; i++) {
+		if(envs[i].env_status == ENV_DYING && envs[i].env_parent_id == e->env_id) {
+			env_free(&envs[i]);
+		}
 	}
 
 	env_free(e);
