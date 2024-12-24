@@ -1,0 +1,57 @@
+合并Lab 4的代码后，出现了以下几个问题，这里给出对应的解决办法。
+
+1. 对齐问题
+
++ cc[USER] lib/spawn.c
+lib/spawn.c: In function ‘spawn’:
+lib/spawn.c:110:42: error: taking address of packed member of ‘struct Trapframe’ may result 
+                    in an unaligned pointer value [-Werror=address-of-packed-member]
+  110 |         if ((r = init_stack(child, argv, &child_tf.tf_esp)) < 0)
+      |                                          ^~~~~~~~~~~~~~~~
+cc1: all warnings being treated as errors
+make: *** [lib/Makefrag:37: obj/lib/spawn.o] Error 1
+
+这个问题的意思是：对结构体成员取地址而引起的未对齐指针问题。
+因为我们在Trapframe的定义中指定了
+    __attribute__((packed)) 
+这会告知编译器不要进行任何填充，即不对结构体成员进行对齐优化，所以会报这个错。
+
+解决办法很简单，直接在GNUmakefile中禁用这个警告即可，即：
+    CFLAGS += -Wno-error=address-of-packed-member
+
+另一种解决办法，即让Trapframe做对齐优化是可不行的！因为Trapframe是我们故意设计成这个样子
+去跟硬件打交道的。
+
+
+2. 多重定义
+
++ ld obj/fs/fs
+ld: obj/fs/bc.o: in function `bc_pgfault':
+fs/bc.c:31: multiple definition of `super'; obj/fs/ide.o:fs/ide.c:19: first defined here
+ld: obj/fs/bc.o: in function `bc_pgfault':
+fs/bc.c:31: multiple definition of `bitmap'; obj/fs/ide.o:fs/ide.c:19: first defined here
+ld: obj/fs/fs.o: in function `walk_path':
+fs/fs.c:236: multiple definition of `super'; obj/fs/ide.o:fs/ide.c:19: first defined here
+ld: obj/fs/fs.o: in function `walk_path':
+fs/fs.c:236: multiple definition of `bitmap'; obj/fs/ide.o:fs/ide.c:19: first defined here
+ld: obj/fs/serv.o: in function `serve_read':
+fs/serv.c:218: multiple definition of `bitmap'; obj/fs/ide.o:fs/ide.c:19: first defined here
+ld: obj/fs/serv.o: in function `serve_read':
+fs/serv.c:218: multiple definition of `super'; obj/fs/ide.o:fs/ide.c:19: first defined here
+ld: obj/fs/test.o: in function `fs_test':
+fs/test.c:10: multiple definition of `bitmap'; obj/fs/ide.o:fs/ide.c:19: first defined here
+ld: obj/fs/test.o: in function `fs_test':
+fs/test.c:10: multiple definition of `super'; obj/fs/ide.o:fs/ide.c:19: first defined here
+make: *** [fs/Makefrag:52: obj/fs/fs] Error 1
+
+显然变量super和bitmap多重定义了。把定义放到fs/fs.c中，然后在fs/fs.h相关的定义前加上extern即可。
+
+
+3. 合并后一些cprintf相关代码没有了/或被注释掉了
+
+取消注释：在env_alloc()，env_free()
+补上代码：在sys_env_destroy()补上
+	if (e == curenv)
+		cprintf("[%08x] exiting gracefully\n", curenv->env_id);
+	else
+		cprintf("[%08x] destroying %08x\n", curenv->env_id, e->env_id);
