@@ -66,6 +66,7 @@ dumbfork(void)
 	// Eagerly copy our entire address space into the child.
 	// This is NOT what you should do in your fork implementation.
 	for (addr = (uint8_t*) UTEXT; addr < end; addr += PGSIZE)
+		// 读者应该确保自己能理解这里在干什么，以及duppage具体的执行流程！
 		duppage(envid, addr);
 
 	// Also copy the stack we are currently running on.

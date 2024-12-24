@@ -65,18 +65,30 @@ _pgfault_upcall:
 	// ways as registers become unavailable as scratch space.
 	//
 	// LAB 4: Your code here.
+	movl 40(%esp), %eax		// 取出trap-time %eip
+	movl 48(%esp), %ebx		// 取出trap-time %esp
+	subl $4, %ebx			// 把%ebx下移4个字节，指向上一个栈帧的栈顶预留出来的空间中
+	movl %eax, (%ebx)		// 把eip(返回地址)存到上一个栈帧的栈顶预留出来的空间中
+	movl %ebx, 48(%esp)		// 别忘了也要让上一个栈帧的栈顶指针下移4个字节，让它指向返回地址
+
 
 	// Restore the trap-time registers.  After you do this, you
 	// can no longer modify any general-purpose registers.
 	// LAB 4: Your code here.
+	addl $8, %esp			// 把fault_va和tf_err(error code)去掉
+	popal					// pop PushRegs
 
 	// Restore eflags from the stack.  After you do this, you can
 	// no longer use arithmetic operations or anything else that
 	// modifies eflags.
 	// LAB 4: Your code here.
+	addl $4, %esp			// 跳过eip
+	popf					// Restore eflags
 
 	// Switch back to the adjusted trap-time stack.
 	// LAB 4: Your code here.
+	movl (%esp), %esp
 
 	// Return to re-execute the instruction that faulted.
 	// LAB 4: Your code here.
+	ret
