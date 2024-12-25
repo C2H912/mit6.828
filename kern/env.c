@@ -491,7 +491,7 @@ void
 env_create(uint8_t *binary, enum EnvType type)
 {
 	// LAB 3: Your code here.
-	struct Env * new_env;
+	struct Env *new_env;
 	if(env_alloc(&new_env, 0) != 0) {
 		panic("env_create: env_alloc(&new_env, 0) fail\n");
 	}
@@ -499,6 +499,9 @@ env_create(uint8_t *binary, enum EnvType type)
 
 	// If this is the file server (type == ENV_TYPE_FS) give it I/O privileges.
 	// LAB 5: Your code here.
+	if(type == ENV_TYPE_FS) {
+		(*new_env).env_tf.tf_eflags |= FL_IOPL_3;
+	}
 }
 
 //

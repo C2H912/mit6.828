@@ -48,10 +48,18 @@ bc_pgfault(struct UTrapframe *utf)
 	// the disk.
 	//
 	// LAB 5: you code here:
+	// 温馨提示，如果写完代码后测试不成功，先试一下make clean然后make，再测试一下。
+	flush_block(addr);
+
+	uint32_t va = ROUNDDOWN((uint32_t)addr, PGSIZE);
+	if ((r = sys_page_alloc(0, (void*)va, PTE_P | PTE_U | PTE_W)) < 0)
+		panic("in bc_pgfault, sys_page_alloc: %e", r);
+	if ((r = ide_read(blockno * BLKSECTS, (void*)(va), BLKSECTS)) < 0)
+		panic("in bc_pgfault, ide_read: %e", r);
 
 	// Clear the dirty bit for the disk block page since we just read the
 	// block from disk
-	if ((r = sys_page_map(0, addr, 0, addr, uvpt[PGNUM(addr)] & PTE_SYSCALL)) < 0)
+	if ((r = sys_page_map(0, (void*)va, 0, (void*)va, uvpt[PGNUM(addr)] & PTE_SYSCALL)) < 0)
 		panic("in bc_pgfault, sys_page_map: %e", r);
 
 	// Check that the block we read was allocated. (exercise for
@@ -77,7 +85,18 @@ flush_block(void *addr)
 		panic("flush_block of bad va %08x", addr);
 
 	// LAB 5: Your code here.
-	panic("flush_block not implemented");
+	//panic("flush_block not implemented");
+	if(!va_is_mapped(addr) || !va_is_dirty(addr)) {
+		return;
+	}
+
+	int r;
+	uint32_t va = ROUNDDOWN((uint32_t)addr, PGSIZE);
+	if ((r = ide_write(blockno * BLKSECTS, (void*)(va), BLKSECTS)) < 0)
+		panic("in bc_pgfault, ide_write: %e", r);
+
+	if ((r = sys_page_map(0, (void*)va, 0, (void*)va, uvpt[PGNUM(addr)] & PTE_SYSCALL)) < 0)
+		panic("in flush_block, sys_page_map: %e", r);
 }
 
 // Test that the block cache works, by smashing the superblock and
@@ -146,6 +165,8 @@ bc_init(void)
 	check_bc();
 
 	// cache the super block by reading it once
+	// 这里的super没什么用，毕竟是栈上的东西，函数退出后就没有了。
+	// 这里实际上只是想触发一次bc_pgfault，把磁盘上的东西读到diskaddr(1)中。
 	memmove(&super, diskaddr(1), sizeof super);
 }
 
