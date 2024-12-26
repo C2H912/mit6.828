@@ -141,11 +141,36 @@ fs_init(void)
 //
 // Analogy: This is like pgdir_walk for files.
 // Hint: Don't forget to clear any block you allocate.
+//
+// 类似于得到页表项的地址，有点像pgdir_walk()
 static int
 file_block_walk(struct File *f, uint32_t filebno, uint32_t **ppdiskbno, bool alloc)
 {
-       // LAB 5: Your code here.
-       panic("file_block_walk not implemented");
+	// LAB 5: Your code here.
+	//panic("file_block_walk not implemented");
+	if(filebno >= NDIRECT + NINDIRECT) {
+		return -E_INVAL;
+	}
+
+	if(filebno < NDIRECT) {
+		*ppdiskbno = &f->f_direct[filebno];
+	}
+	else {
+		if(f->f_indirect == 0) {
+			if(alloc == false) {
+				return -E_NOT_FOUND;
+			}
+			int r;
+			if((r = alloc_block()) < 0) {
+				return r;
+			}
+			f->f_indirect = r;
+			flush_block(&f->f_indirect);
+		}
+		*ppdiskbno = &(((uint32_t*)f->f_indirect)[filebno]);
+	}
+
+	return 0;
 }
 
 // Set *blk to the address in memory where the filebno'th
@@ -156,11 +181,31 @@ file_block_walk(struct File *f, uint32_t filebno, uint32_t **ppdiskbno, bool all
 //	-E_INVAL if filebno is out of range.
 //
 // Hint: Use file_block_walk and alloc_block.
+//
+// 类似于得到页的地址
 int
 file_get_block(struct File *f, uint32_t filebno, char **blk)
 {
-       // LAB 5: Your code here.
-       panic("file_get_block not implemented");
+	// LAB 5: Your code here.
+	//panic("file_get_block not implemented");
+	int r;
+	// 先得到"页表项"的地址
+	uint32_t *ppdiskbno;
+	if((r = file_block_walk(f, filebno, &ppdiskbno, true)) < 0) {
+		return r;
+	}
+	// 如果当前"页表项"为空，那么就分配一个"页"给它
+	if(*ppdiskbno == 0) {
+		if((r = alloc_block()) < 0) {
+			return r;
+		}
+		*ppdiskbno = r;
+		flush_block(ppdiskbno);
+	}
+
+	// 从"页表项"中取出"页地址"
+	*blk = diskaddr(*ppdiskbno);
+	return 0;
 }
 
 // Try to find a file named "name" in dir.  If so, set *file to it.
