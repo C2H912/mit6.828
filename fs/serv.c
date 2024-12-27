@@ -137,7 +137,7 @@ serve_open(envid_t envid, struct Fsreq_open *req,
 try_open:
 		if ((r = file_open(path, &f)) < 0) {
 			if (debug)
-				cprintf("file_open failed: %e", r);
+				cprintf("file_open failed: %e\n", r);
 			return r;
 		}
 	}
@@ -152,7 +152,7 @@ try_open:
 	}
 	if ((r = file_open(path, &f)) < 0) {
 		if (debug)
-			cprintf("file_open failed: %e", r);
+			cprintf("file_open failed: %e\n", r);
 		return r;
 	}
 
@@ -214,7 +214,18 @@ serve_read(envid_t envid, union Fsipc *ipc)
 		cprintf("serve_read %08x %08x %08x\n", envid, req->req_fileid, req->req_n);
 
 	// Lab 5: Your code here:
-	return 0;
+	// 参考serve_set_size()即可。
+	struct OpenFile *o;
+	int r;
+	if ((r = openfile_lookup(envid, req->req_fileid, &o)) < 0)
+		return r;
+	
+	int count;
+	if((count = file_read(o->o_file, ret, req->req_n, o->o_fd->fd_offset)) < 0) {
+		return count;
+	}
+	o->o_fd->fd_offset += count;
+	return count;
 }
 
 
@@ -229,7 +240,19 @@ serve_write(envid_t envid, struct Fsreq_write *req)
 		cprintf("serve_write %08x %08x %08x\n", envid, req->req_fileid, req->req_n);
 
 	// LAB 5: Your code here.
-	panic("serve_write not implemented");
+	//panic("serve_write not implemented");
+	struct OpenFile *o;
+	int r;
+	if ((r = openfile_lookup(envid, req->req_fileid, &o)) < 0)
+		return r;
+	
+	cprintf("serve_write\n");
+	int count;
+	if((count = file_write(o->o_file, req->req_buf, req->req_n, o->o_fd->fd_offset)) < 0) {
+		return count;
+	}
+	o->o_fd->fd_offset += count;
+	return count;
 }
 
 // Stat ipc->stat.req_fileid.  Return the file's struct Stat to the
@@ -298,8 +321,10 @@ serve(void)
 	int perm, r;
 	void *pg;
 
+	// 这就是一个简单的服务器
 	while (1) {
 		perm = 0;
+		// 1. 接收用户请求
 		req = ipc_recv((int32_t *) &whom, fsreq, &perm);
 		if (debug)
 			cprintf("fs req %d from %08x [page %08x: %s]\n",
@@ -312,6 +337,7 @@ serve(void)
 			continue; // just leave it hanging...
 		}
 
+		// 2. 处理用户请求
 		pg = NULL;
 		if (req == FSREQ_OPEN) {
 			r = serve_open(whom, (struct Fsreq_open*)fsreq, &pg, &perm);
@@ -321,6 +347,8 @@ serve(void)
 			cprintf("Invalid request code %d from %08x\n", req, whom);
 			r = -E_INVAL;
 		}
+
+		// 3. 返回结果
 		ipc_send(whom, r, pg, perm);
 		sys_page_unmap(0, fsreq);
 	}

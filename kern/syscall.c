@@ -408,8 +408,20 @@ sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
 		if(dst_pte == NULL) {
 			return -E_NO_MEM;
 		}
-		
+
 		*dst_pte = ((*pte) & 0xfffff000) | perm;
+
+		/* 
+		 * 加入映射后千万别忘了将对应物理页的引用计数+1 !!!
+		 * 
+		 * 在Lab 4的测试中，没有以下几行是没问题的。但是在Lab 5 ex 5写完后，make run-testfile-nox
+		 * 测试时，会在这一句"panic("file_stat: %e", r);"出问题，一层层挖下去发现是跟物理页引用计数
+		 * 有关的问题，于是对引用计数进行排查，才发现这里少写了。
+		 */
+		physaddr_t pa = (*pte) & 0xfffff000;
+		struct PageInfo *page = pa2page(pa);
+		page->pp_ref++;
+
 		env->env_ipc_perm = perm;
 	}
 	// If the sender wants to send a page but the receiver isn't asking for one,

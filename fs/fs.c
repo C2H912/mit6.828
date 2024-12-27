@@ -167,7 +167,11 @@ file_block_walk(struct File *f, uint32_t filebno, uint32_t **ppdiskbno, bool all
 			f->f_indirect = r;
 			flush_block(&f->f_indirect);
 		}
-		*ppdiskbno = &(((uint32_t*)f->f_indirect)[filebno]);
+		// 时刻要注意f->f_direct是数组的首地址，但是f->f_indirect是块号，
+		// 之前我写了这样一个bug：
+		// 		*ppdiskbno = &(((uint32_t*)f->f_indirect)[filebno]);
+		uint32_t *va = diskaddr(f->f_indirect);
+		*ppdiskbno = &(va[filebno]);
 	}
 
 	return 0;

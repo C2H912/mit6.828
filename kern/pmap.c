@@ -573,11 +573,17 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 {
 	// Fill this function in
 	// Lab 2 Exercise 4
-	// Requirements 2和3已经在pgdir_walk()中实现了
+	// Requirements 2已经在pgdir_walk()中实现了
 	pte_t *pte = pgdir_walk(pgdir, va, 1);	
 	if(pte == NULL) {
 		return -E_NO_MEM;
 	}
+	// Requirements 3
+	/* Corner-case hint:
+	 * 
+	 * 个人认为，所谓的"elegant way"其实就是在page_remove()之前进行pp->pp_ref++;
+	 * 读者可以交换一下这两行的顺序，想想在上文提到的Corner-case中会分别发生什么。
+	 */
 	pp->pp_ref++;
 	// Requirements 1和4已经在page_remove()中实现了
 	if(*pte != 0) {
