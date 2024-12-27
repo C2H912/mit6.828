@@ -104,6 +104,8 @@ spawn(const char *prog, const char **argv)
 	child = r;
 
 	// Set up trap frame, including initial stack.
+	// 为什么这里不直接设置envs中的Trapframe，而是要复制出来并在之后调用
+	// sys_env_set_trapframe()来设置呢？因为现在是在用户态下！没有权限修改内核的envs！
 	child_tf = envs[ENVX(child)].env_tf;
 	child_tf.tf_eip = elf->e_entry;
 
@@ -302,6 +304,17 @@ static int
 copy_shared_pages(envid_t child)
 {
 	// LAB 5: Your code here.
+	// 相比于fork.c中的copy_address_space()，这里用了更简洁更优雅的方式实现了页表项的遍历
+	for(uint32_t va = 0; va <= UTOP; va += PGSIZE) {
+		if(uvpd[PDX(va)] != 0 && uvpt[PGNUM(va)] != 0) {
+			int r;
+			int perm = uvpt[PGNUM(va)] & PTE_SYSCALL;
+			if((perm & PTE_SHARE) == PTE_SHARE) {
+				if((r = sys_page_map(thisenv->env_id, (void*)va, child, (void*)va, perm)) < 0)
+					panic("copy_shared_pages: sys_page_map: %e", r);
+			}
+		}
+	}
 	return 0;
 }
 

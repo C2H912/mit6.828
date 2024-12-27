@@ -81,9 +81,15 @@ duppage(envid_t envid, unsigned pn)
 	//panic("duppage not implemented");
 	uint32_t va = pn * PGSIZE;
 	pte_t cur = uvpt[pn];
-	int perm = cur & 0x0fff;
+	// You should use PTE_SYSCALL, not 0xfff, to mask out the relevant bits from
+	// the page table entry. 0xfff picks up the accessed and dirty bits as well
+	int perm = cur & PTE_SYSCALL;
 	// If the page is writable or copy-on-write
-	if((perm & PTE_W) == PTE_W || (perm & PTE_COW) == PTE_COW) {
+	if((perm & PTE_SHARE) == PTE_SHARE) {
+		if((r = sys_page_map(thisenv->env_id, (void*)va, envid, (void*)va, perm)) < 0)
+			panic("duppage: sys_page_map: %e", r);
+	}
+	else if((perm & PTE_W) == PTE_W || (perm & PTE_COW) == PTE_COW) {
 		//cprintf("cow page: %d\n", pn);
 		if((r = sys_page_map(thisenv->env_id, (void*)va, envid, (void*)va, PTE_U | PTE_P | PTE_COW)) < 0)
 			panic("duppage: sys_page_map: %e", r);

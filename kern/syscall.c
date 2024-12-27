@@ -143,8 +143,53 @@ sys_env_set_trapframe(envid_t envid, struct Trapframe *tf)
 	// LAB 5: Your code here.
 	// Remember to check whether the user has supplied us with a good
 	// address!
-	panic("sys_env_set_trapframe not implemented");
+	//panic("sys_env_set_trapframe not implemented");
+	struct Env *env;
+	int ret = envid2env(envid, &env, 1);
+	if(ret < 0) {
+		return -E_BAD_ENV;		
+	}
+	// always run at code protection level 3 (CPL 3)
+	tf->tf_ds = GD_UD | 3;
+	tf->tf_es = GD_UD | 3;
+	tf->tf_ss = GD_UD | 3;
+	tf->tf_cs = GD_UT | 3;
+	/*
+	 * BUG警告：tf->tf_esp = USTACKTOP; 读者可以想想这里为什么不能设置esp，后文给答案。
+	 */
+	// interrupts enabled
+	tf->tf_eflags |= FL_IF;
+	// IOPL of 0
+	tf->tf_eflags &= (~FL_IOPL_3);
+
+	env->env_tf = *tf;
+	return 0;
 }
+/*
+ * ----------- BUG警告：tf->tf_esp = USTACKTOP;
+ *
+ * 之前为了设置这个CPL 3时，我从env_alloc()中直接把
+ * 		e->env_tf.tf_ds = GD_UD | 3;
+ * 				......
+ * 		e->env_tf.tf_cs = GD_UT | 3;
+ * 这部分复制过来了。当时没注意到这里面包含了一个 e->env_tf.tf_esp = USTACKTOP;
+ * 而tf_esp已经在spawn()中通过init_stack()设置好了，也就是这里不能再修改esp的值！
+ * 
+ * 你可以在duppage()和copy_shared_pages()中完成PTE_SYSCALL有关的代码后，回来加上这句BUG代码，
+ * 然后make run-testpteshare-nox，观察下会发生什么————会不断地创建新环境！
+ * 
+ * 为什么？因为testpteshare.c中的：
+ *		void childofspawn(void)
+ *		{
+ *			strcpy(VA, msg2);
+ *			exit();
+ *		}
+ * 不会执行，也就是if (argc != 0)总是不满足的。但是我们发现子进程是通过这句话创建的：
+ * 		spawnl("/testpteshare", "testpteshare", "arg", 0)
+ * 也就是子进程执行testpteshare时，argc应该大于0，但现在argc != 0总是不成立 (也就是
+ * argc恒等于0)，那就说明问题出在函数参数的传递上了，而函数参数又是通过栈来传递的，
+ * 所以显然，问题出在栈上面，首先想到的就是esp指针的问题，所以检查Trapframe，果然BUG在这里。
+ */
 
 // Set the page fault upcall for 'envid' by modifying the corresponding struct
 // Env's 'env_pgfault_upcall' field.  When 'envid' causes a page fault, the
@@ -515,6 +560,8 @@ syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, 
 		return sys_ipc_try_send((envid_t)a1, (uint32_t)a2, (void*)a3, (unsigned int)a4);
 	case SYS_ipc_recv:
 		return sys_ipc_recv((void*)a1);
+	case SYS_env_set_trapframe:
+	 	return sys_env_set_trapframe((envid_t)a1, (struct Trapframe*)a2);
 	case NSYSCALLS:
 		break;
 	default:
