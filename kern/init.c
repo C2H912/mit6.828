@@ -149,7 +149,7 @@ _panic(const char *file, int line, const char *fmt,...)
 	asm volatile("cli; cld");
 
 	va_start(ap, fmt);
-	cprintf("kernel panic on CPU %d at %s:%d: ", cpunum(), file, line);
+	cprintf("=%08x= kernel panic on CPU %d at %s:%d: ", curenv->env_id, cpunum(), file, line);
 	vcprintf(fmt, ap);
 	cprintf("\n");
 	va_end(ap);

@@ -35,8 +35,7 @@ sched_yield(void)
 	if(thiscpu->cpu_env == NULL) {
 		for(size_t i = 0; i < NENV; i++) {
 			if(envs[i].env_status == ENV_RUNNABLE) {
-				thiscpu->cpu_env = &envs[i];
-				env_run(thiscpu->cpu_env);	// 注意env_run()永不返回
+				env_run(&envs[i]);	// 注意env_run()永不返回
 			}
 		}
 	}
@@ -47,8 +46,7 @@ sched_yield(void)
 		while(search_len <= NENV - 1) {
 			size_t cur_id = (start + search_len) % NENV;
 			if(envs[cur_id].env_status == ENV_RUNNABLE) {
-				thiscpu->cpu_env = &envs[cur_id];
-				env_run(thiscpu->cpu_env);
+				env_run(&envs[cur_id]);
 			}
 			search_len++;
 		}
@@ -64,11 +62,16 @@ sched_yield(void)
 	while(search_len <= NENV - 1) {
 		size_t cur_id = (start + search_len) % NENV;
 		if(envs[cur_id].env_status == ENV_RUNNING && envs[cur_id].env_cpunum == thiscpu->cpu_id) {
-			thiscpu->cpu_env = &envs[cur_id];
 			start = (cur_id + 1) % NENV;
-			env_run(thiscpu->cpu_env);
+			env_run(&envs[cur_id]);
 		}
 		search_len++;
+	}
+
+	for(size_t i = 0; i < NENV; i++) {
+		if(envs[i].env_status == ENV_DYING) {
+			env_run(&envs[i]);	// 注意env_run()永不返回
+		}
 	}
 
 	// sched_halt never returns

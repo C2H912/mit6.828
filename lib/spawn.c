@@ -315,6 +315,9 @@ copy_shared_pages(envid_t child)
 			}
 		}
 	}
+	// int r;
+	// if((r = sys_page_alloc(child, (void*)(UXSTACKTOP - PGSIZE), PTE_P | PTE_U | PTE_W)) < 0)
+	// 	panic("copy_address_space: sys_page_alloc: %e", r);
 	return 0;
 }
 

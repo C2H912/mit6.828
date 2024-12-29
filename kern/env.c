@@ -72,6 +72,9 @@ struct Pseudodesc gdt_pd = {
 //   On success, sets *env_store to the environment.
 //   On error, sets *env_store to NULL.
 //
+void mybp3() {
+	return;
+}
 int
 envid2env(envid_t envid, struct Env **env_store, bool checkperm)
 {
@@ -495,13 +498,14 @@ env_create(uint8_t *binary, enum EnvType type)
 	if(env_alloc(&new_env, 0) != 0) {
 		panic("env_create: env_alloc(&new_env, 0) fail\n");
 	}
+	(*new_env).env_type = type;
 	load_icode(new_env, binary);
 
 	// If this is the file server (type == ENV_TYPE_FS) give it I/O privileges.
 	// LAB 5: Your code here.
 	if(type == ENV_TYPE_FS) {
 		(*new_env).env_tf.tf_eflags |= FL_IOPL_3;
-		(*new_env).env_type = ENV_TYPE_FS;	// 别忘了这一句!!!
+		cprintf("[%08x] type %d\n", (*new_env).env_id, (*new_env).env_type);
 	}
 }
 
@@ -579,11 +583,11 @@ env_destroy(struct Env *e)
 	// 写这几句的本意是：在执行spin.c时我发现父进程执行sys_env_destroy(env);后，子进程被标记为僵死进程，
 	// 但还没有env_free子进程，这时父进程执行完成后就自己退出了(也就是destroy + free)，那么就出现了无人
 	// 回收子进程内核资源的情况，所以这里补充了这几句。
-	for(size_t i = 0; i < NENV; i++) {
-		if(envs[i].env_status == ENV_DYING && envs[i].env_parent_id == e->env_id) {
-			env_free(&envs[i]);
-		}
-	}
+	// for(size_t i = 0; i < NENV; i++) {
+	// 	if(envs[i].env_status == ENV_DYING && envs[i].env_parent_id == e->env_id) {
+	// 		env_free(&envs[i]);
+	// 	}
+	// }
 
 	env_free(e);
 
@@ -641,6 +645,7 @@ env_run(struct Env *e)
 	if(curenv == NULL) {
 		// Set 'curenv' to the new environment
 		curenv = e;
+		curenv->env_status = ENV_RUNNING;
 	}
 	// If this is a context switch (a new environment is running):
 	else if(curenv->env_id != e->env_id) {
@@ -649,15 +654,22 @@ env_run(struct Env *e)
 		if(curenv->env_status == ENV_RUNNING) {
 			curenv->env_status = ENV_RUNNABLE;
 		}
-		curenv = e;
+		if(e->env_status == ENV_RUNNABLE || e->env_status == ENV_RUNNING) {
+			e->env_status = ENV_RUNNING;
+			curenv = e;
+		}
+		else if(e->env_status == ENV_NOT_RUNNABLE || e->env_status == ENV_FREE) {
+
+		}
 	}
+
 	// Update its 'env_runs' counter
 	curenv->env_runs++;
 
 	// 注意!!!
 	// Lab 4必须将这两句移动到这里，因为从sched_yield()进来的情况下，
 	// 上面的两个if都不会执行！如果不注意到这个细节，那么就enjoy dubugging吧 :)
-	curenv->env_status = ENV_RUNNING;	// Set its status to ENV_RUNNING
+	//curenv->env_status = ENV_RUNNING;	// Set its status to ENV_RUNNING
 	lcr3(PADDR(curenv->env_pgdir));	 // Use lcr3() to switch to its address space
 
 	// 实现"谁启动谁完成"的语意，详见sched_yield()的case 2

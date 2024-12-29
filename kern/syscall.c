@@ -416,6 +416,7 @@ sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
 	int ret = envid2env(envid, &env, 0);
 	// if environment envid doesn't currently exist.
 	if(ret < 0) {
+		cprintf("[%08x] sys_ipc_try_send: ret < 0\n", envid);
 		return -E_BAD_ENV;
 	}
 	// if envid is not currently blocked in sys_ipc_recv,

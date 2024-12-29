@@ -286,7 +286,7 @@ trap_dispatch(struct Trapframe *tf)
 		 * 这里很精妙，读者可以思考一下为什么syscall的参数是这些，答案在trap_dispatch()结尾注释给出
 		 */
 		ret = syscall(tf->tf_regs.reg_eax, tf->tf_regs.reg_edx, tf->tf_regs.reg_ecx, 
-							  tf->tf_regs.reg_ebx, tf->tf_regs.reg_edi, tf->tf_regs.reg_esi);
+					  tf->tf_regs.reg_ebx, tf->tf_regs.reg_edi, tf->tf_regs.reg_esi);
 		if(ret < 0) {
 			break;
 		}
@@ -325,6 +325,15 @@ trap_dispatch(struct Trapframe *tf)
 
 	// Handle keyboard and serial interrupts.
 	// LAB 5: Your code here.
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_KBD) {
+		kbd_intr();
+		return;
+	}
+
+	if (tf->tf_trapno == IRQ_OFFSET + IRQ_SERIAL) {
+		serial_intr();
+		return;
+	}
 
 	// Unexpected trap: The user process or the kernel has a bug.
 	print_trapframe(tf);
@@ -411,7 +420,9 @@ trap(struct Trapframe *tf)
 		sched_yield();
 }
 
-
+void mybp() {
+	return;
+}
 void
 page_fault_handler(struct Trapframe *tf)
 {
@@ -419,6 +430,9 @@ page_fault_handler(struct Trapframe *tf)
 
 	// Read processor's CR2 register to find the faulting address
 	fault_va = rcr2();
+	if(fault_va == 0) {
+		mybp();
+	}
 
 	// Handle kernel-mode page faults.
 
@@ -476,6 +490,7 @@ page_fault_handler(struct Trapframe *tf)
 	 */
 
 	if(curenv->env_pgfault_upcall != NULL) {
+		//mybp();
 
 		uint32_t *uxstack_ptr = NULL;
 		// (1) tf_esp < USTACKTOP说明是从用户栈首次切换到异常栈，所以要将esp更新为异常栈的开始

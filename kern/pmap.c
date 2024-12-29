@@ -363,7 +363,7 @@ page_init(void)
 		page_free_list = &pages[i];
 	}
 	// 3) [IOPHYSMEM, EXTPHYSMEM), which must never be allocated.
-	for(i = IOPHYSMEM / PGSIZE; i <= EXTPHYSMEM / PGSIZE; i++) {
+	for(i = IOPHYSMEM / PGSIZE; i < EXTPHYSMEM / PGSIZE; i++) {
 		pages[i].pp_ref = 1;
 		pages[i].pp_link = NULL;
 	}
@@ -436,8 +436,12 @@ page_free(struct PageInfo *pp)
 	// Hint: You may want to panic if pp->pp_ref is nonzero or
 	// pp->pp_link is not NULL.
 	// Lab 2 Exercise 1 对着要求写即可
-	if(pp->pp_ref != 0 || pp->pp_link != NULL) {
-		panic("page_free: pp->pp_ref != 0 || pp->pp_link != NULL\n");
+	if(pp->pp_ref != 0) {
+		panic("page_free: pp->pp_ref != 0\n");
+	}
+	if(pp->pp_link != NULL) {
+		cprintf("page_free at addr: %x\n", page2kva(pp));
+		panic("page_free: pp->pp_link != NULL\n");
 	}
 	pp->pp_link = page_free_list;
 	page_free_list = pp;
@@ -618,6 +622,10 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 	if(pte_store != NULL) {
 		*pte_store = pte; 
 	}
+	// if(*pte != 0 && (*pte & PTE_P)) {
+	// 	return pa2page(*pte);
+	// }
+	// return NULL;
 	return pa2page(*pte);
 }
 

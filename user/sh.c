@@ -1,7 +1,7 @@
 #include <inc/lib.h>
 
 #define BUFSIZ 1024		/* Find the buffer overrun bug! */
-int debug = 0;
+int debug = 1;
 
 
 // gettoken(s, 0) prepares gettoken for subsequent calls and returns 0.
@@ -86,6 +86,7 @@ again:
 				exit();
 			}
 			if (r == 0) {
+				cprintf("fork child pgfault entry: %x\n", thisenv->env_pgfault_upcall);
 				if (p[0] != 0) {
 					dup(p[0], 0);
 					close(p[0]);

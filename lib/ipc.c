@@ -2,6 +2,8 @@
 
 #include <inc/lib.h>
 
+#define debug 0
+
 // Receive a value via IPC and return it.
 // If 'pg' is nonnull, then any page sent by the sender will be mapped at
 //	that address.
@@ -24,6 +26,8 @@ ipc_recv(envid_t *from_env_store, void *pg, int *perm_store)
 {
 	// LAB 4: Your code here.
 	//panic("ipc_recv not implemented");
+	if(debug)
+		cprintf(" <-- [%08x] ipc_recv va: %x\n", thisenv->env_id, pg);
 	uint32_t va;
 	if(pg != NULL) {
 		va = (uint32_t)pg;
@@ -76,6 +80,8 @@ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
 
 	int ret;
 	while(1) {
+		if(debug)
+			cprintf(" --> [%08x] ipc_send to: [%08x] val: %d, va: %x\n", thisenv->env_id, to_env, val, pg);
 		ret = sys_ipc_try_send(to_env, val, (void*)va, perm);
 		if(ret < 0) {
 			if(ret == -E_IPC_NOT_RECV) {
@@ -86,6 +92,8 @@ ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
 		}
 		break;
 	}
+	if(debug)
+		cprintf(" --> [%08x] ipc_send to [%08x] success\n", thisenv->env_id, to_env);
 }
 
 // Find the first environment of the given type.  We'll use this to

@@ -247,8 +247,9 @@ serve_write(envid_t envid, struct Fsreq_write *req)
 		return r;
 	
 	cprintf("serve_write\n");
+	size_t size = req->req_n > PGSIZE ? PGSIZE : req->req_n;
 	int count;
-	if((count = file_write(o->o_file, req->req_buf, req->req_n, o->o_fd->fd_offset)) < 0) {
+	if((count = file_write(o->o_file, req->req_buf, size, o->o_fd->fd_offset)) < 0) {
 		return count;
 	}
 	o->o_fd->fd_offset += count;
@@ -323,6 +324,8 @@ serve(void)
 
 	// 这就是一个简单的服务器
 	while (1) {
+		if(debug)
+			cprintf("\n*** serve one round begin\n");
 		perm = 0;
 		// 1. 接收用户请求
 		req = ipc_recv((int32_t *) &whom, fsreq, &perm);
@@ -350,7 +353,11 @@ serve(void)
 
 		// 3. 返回结果
 		ipc_send(whom, r, pg, perm);
+		if(debug)
+			cprintf("*** server unmap va: %x pa: %d\n", fsreq, uvpt[PGNUM(fsreq)]);
 		sys_page_unmap(0, fsreq);
+		if(debug)
+			cprintf("*** serve one round end\n");
 	}
 }
 

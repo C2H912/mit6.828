@@ -3,6 +3,8 @@
 #include <inc/string.h>
 #include <inc/lib.h>
 
+#define debug 1
+
 // PTE_COW marks copy-on-write page table entries.
 // It is one of the bits explicitly allocated to user processes (PTE_AVAIL).
 #define PTE_COW		0x800
@@ -14,9 +16,14 @@
 static void
 pgfault(struct UTrapframe *utf)
 {
+	envid_t cur_eid = sys_getenvid();
+	if(debug)
+		cprintf("\t[%08x] enter fork pgfault\n", cur_eid);
 	void *addr = (void *) utf->utf_fault_va;
 	uint32_t err = utf->utf_err;
 	int r;
+	if(debug)
+		cprintf("\t[%08x] pgfault addr: %x eip: %x esp: %x\n", cur_eid, addr, utf->utf_eip, utf->utf_esp);
 
 	// Check that the faulting access was (1) a write, and (2) to a
 	// copy-on-write page.  If not, panic.
@@ -27,7 +34,7 @@ pgfault(struct UTrapframe *utf)
 	// LAB 4: Your code here.
 	unsigned pn = ((uint32_t)addr) / PGSIZE; 
 	if((err & FEC_WR) != FEC_WR || (uvpt[pn] & PTE_COW) != PTE_COW) {
-		panic("pgfault: the faulting is not a write or not PTE_COW\n");
+		panic("\tpgfault: the faulting is not a write or not PTE_COW, fault addr: %x\n", utf->utf_fault_va);
 	}
 
 	// Allocate a new page, map it at a temporary location (PFTEMP),
@@ -40,17 +47,19 @@ pgfault(struct UTrapframe *utf)
 	/*
 	 * 为什么这里不能直接使用thisenv->env_id？答案在函数后的注释中给出
 	 */
-	envid_t cur_eid = sys_getenvid();
+	//envid_t cur_eid = sys_getenvid();
 
 	if((r = sys_page_alloc(cur_eid, PFTEMP, PTE_P | PTE_U | PTE_W)) < 0)
-		panic("pgfault: sys_page_alloc: %e", r);
+		panic("\tpgfault: sys_page_alloc: %e", r);
 	memmove(PFTEMP, (void*)(pn * PGSIZE), PGSIZE);
 	if((r = sys_page_map(cur_eid, PFTEMP, cur_eid, (void*)(pn * PGSIZE), PTE_P | PTE_U | PTE_W)) < 0)
-		panic("pgfault: sys_page_map: %e", r);
+		panic("\tpgfault: sys_page_map: %e", r);
 	if((r = sys_page_unmap(cur_eid, PFTEMP)) < 0)
-		panic("pgfault: sys_page_unmap: %e", r);
+		panic("\tpgfault: sys_page_unmap: %e", r);
 
 	//panic("pgfault not implemented");
+	if(debug) 
+		cprintf("\t[%08x] complete fork pgfault\n", cur_eid);
 }
 /*
  * ---------- 为什么这里不能直接使用thisenv->env_id？
@@ -111,7 +120,7 @@ copy_address_space(envid_t envid)
 	// 遍历页目录表项
 	for(size_t i = 0; i < 1024; i++) {
 		bool complete_flag = false;
-		if(uvpd[i] != 0) {
+		if(uvpd[i] != 0 && (uvpd[i] & PTE_P)) {
 			// 对于每个非空的页目录表项，遍历其所有的页表项
 			for(size_t j = 0; j < 1024; j++) {
 				unsigned pn = i * 1024 + j;
@@ -121,7 +130,7 @@ copy_address_space(envid_t envid)
 					complete_flag = true;
 					break;
 				}
-				if(uvpt[pn] != 0) {
+				if(uvpt[pn] != 0 && (uvpt[pn] & PTE_P)) {
 					duppage(envid, pn);
 				}
 			}
@@ -156,6 +165,8 @@ copy_address_space(envid_t envid)
 envid_t
 fork(void)
 {
+	if(debug)
+		cprintf(">>>>>  [%08x] fork start\n", thisenv->env_id);
 	// LAB 4: Your code here.
 	//panic("fork not implemented");
 	// 这个函数大体逻辑参照dumbfork()即可
@@ -193,6 +204,8 @@ fork(void)
 	if ((r = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
 		panic("fork: sys_env_set_status: %e", r);
 
+	if(debug)
+		cprintf("       [%08x] fork [%08x] complete  <<<<<\n", thisenv->env_id, envid);
 	return envid;
 }
 /*
