@@ -574,17 +574,6 @@ env_destroy(struct Env *e)
 		return;
 	}
 
-	// 在env_free(e)之前，把e所有的僵死子进程的资源先free掉。
-	//
-	// 写这几句的本意是：在执行spin.c时我发现父进程执行sys_env_destroy(env);后，子进程被标记为僵死进程，
-	// 但还没有env_free子进程，这时父进程执行完成后就自己退出了(也就是destroy + free)，那么就出现了无人
-	// 回收子进程内核资源的情况，所以这里补充了这几句。
-	for(size_t i = 0; i < NENV; i++) {
-		if(envs[i].env_status == ENV_DYING && envs[i].env_parent_id == e->env_id) {
-			env_free(&envs[i]);
-		}
-	}
-
 	env_free(e);
 
 	if (curenv == e) {
@@ -636,32 +625,15 @@ env_run(struct Env *e)
 	//	e->env_tf to sensible values.
 
 	// LAB 3: Your code here.
-
-	// Note: if this is the first call to env_run, curenv is NULL.
-	if(curenv == NULL) {
-		// Set 'curenv' to the new environment
-		curenv = e;
-	}
-	// If this is a context switch (a new environment is running):
-	else if(curenv->env_id != e->env_id) {
-		// Set the current environment (if any) back to ENV_RUNNABLE if
-		// it is ENV_RUNNING (think about what other states it can be in)
+	if(curenv != NULL && curenv->env_id != e->env_id) {
 		if(curenv->env_status == ENV_RUNNING) {
 			curenv->env_status = ENV_RUNNABLE;
 		}
-		curenv = e;
 	}
-	// Update its 'env_runs' counter
-	curenv->env_runs++;
-
-	// 注意!!!
-	// Lab 4必须将这两句移动到这里，因为从sched_yield()进来的情况下，
-	// 上面的两个if都不会执行！如果不注意到这个细节，那么就enjoy dubugging吧 :)
-	curenv->env_status = ENV_RUNNING;	// Set its status to ENV_RUNNING
-	lcr3(PADDR(curenv->env_pgdir));	 // Use lcr3() to switch to its address space
-
-	// 实现"谁启动谁完成"的语意，详见sched_yield()的case 2
-	curenv->env_cpunum = cpunum();
+	curenv = e;
+	curenv->env_runs++;						// Update its 'env_runs' counter
+	curenv->env_status = ENV_RUNNING;		// Set its status to ENV_RUNNING
+	lcr3(PADDR(curenv->env_pgdir));	 		// Use lcr3() to switch to its address space
 
 	// Use env_pop_tf() to restore the environment's
 	// registers and drop into user mode in the environment.
@@ -670,7 +642,6 @@ env_run(struct Env *e)
 	// 怎么就能执行用户程序了？？？解释将在这个函数后的注释中给出
 	env_pop_tf(&curenv->env_tf);
 
-	//panic("env_run not yet implemented");
 }
 /*
  * --- env_pop_tf()到底是怎样切换到用户程序执行的？

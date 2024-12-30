@@ -1,0 +1,41 @@
+在写完Lab 5 ex 9 & 10后，进行测试make run-testshell-nox，发现出现了奇怪的报错。
+由于吸取了Debug_record.txt的教训，我这次直接使用代码替换来Debug，用的还是这位前辈的代码：
+    知乎地址：https://zhuanlan.zhihu.com/p/74028717
+    对应的github地址：https://github.com/SmallPond/MIT6.828_OS
+在此再次表达感谢。
+
+这次的问题出在sched.c和env.c。这里在之前其实已经埋下了两个隐患：
+
+1. 项目做到这里，其实都清楚需要写代码的地方都会有"Lab x: Your code here"的提示，不过有一个地方，
+在env_destroy()，我自己补充了一段代码：
+    // 写这几句的本意是：在执行spin.c时我发现父进程执行sys_env_destroy(env);后，子进程被标记为僵死进程，
+	// 但还没有env_free子进程，这时父进程执行完成后就自己退出了(也就是destroy + free)，那么就出现了无人
+	// 回收子进程内核资源的情况，所以这里补充了这几句。
+	for(size_t i = 0; i < NENV; i++) {
+		if(envs[i].env_status == ENV_DYING && envs[i].env_parent_id == e->env_id) {
+			env_free(&envs[i]);
+		}
+	}
+实际上并不需要在这里进行垃圾回收，因为在trap()中，是包含了垃圾回收机制的：
+    // Garbage collect if current enviroment is a zombie
+    if (curenv->env_status == ENV_DYING) {
+        env_free(curenv);
+        curenv = NULL;
+        sched_yield();
+    }
+我在env_destroy()加入的代码，可能会破坏掉mit作者原有的设计意图。
+
+2. sched_yield()和env_run()的逻辑写得过于复杂了。
+
+所以现在决定还原env_destroy()，重构sched_yield()和env_run()，并通过make run-testshell-nox测试。
+
+经过重构后，发现问题其实就出在sched_yield()的这种情况：
+    // If no envs are runnable, but the environment previously running on this 
+	// CPU is still ENV_RUNNING, it's okay to choose that environment.
+之前我对这句话的理解过于复杂化了，还想着记录下env_cpunum来判断envs[cur_id].env_cpunum == thiscpu->cpu_id，
+还写了个复杂的while循环来决定调度谁，实际上根本不需要这样，只需要简简单单的：
+    idle = thiscpu->cpu_env;
+    if(idle != NULL && idle->env_status == ENV_RUNNING) {
+		env_run(idle);
+	}
+就可以了，把逻辑搞得过于复杂导致最后出现了难以理解的Bug，无语。
