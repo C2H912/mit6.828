@@ -246,7 +246,6 @@ serve_write(envid_t envid, struct Fsreq_write *req)
 	if ((r = openfile_lookup(envid, req->req_fileid, &o)) < 0)
 		return r;
 	
-	cprintf("serve_write\n");
 	int count;
 	if((count = file_write(o->o_file, req->req_buf, req->req_n, o->o_fd->fd_offset)) < 0) {
 		return count;
