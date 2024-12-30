@@ -615,10 +615,13 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 	if(pte == NULL) {
 		return NULL;
 	}
-	if(pte_store != NULL) {
-		*pte_store = pte; 
+	if((*pte) != 0 && ((*pte) & PTE_P)) {
+		if(pte_store != NULL) {
+			*pte_store = pte; 
+		}
+		return pa2page(*pte);
 	}
-	return pa2page(*pte);
+	return NULL;
 }
 
 //

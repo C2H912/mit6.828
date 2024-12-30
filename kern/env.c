@@ -495,13 +495,13 @@ env_create(uint8_t *binary, enum EnvType type)
 	if(env_alloc(&new_env, 0) != 0) {
 		panic("env_create: env_alloc(&new_env, 0) fail\n");
 	}
+	(*new_env).env_type = type;		// 别忘了这一句!!!
 	load_icode(new_env, binary);
 
 	// If this is the file server (type == ENV_TYPE_FS) give it I/O privileges.
 	// LAB 5: Your code here.
 	if(type == ENV_TYPE_FS) {
 		(*new_env).env_tf.tf_eflags |= FL_IOPL_3;
-		(*new_env).env_type = ENV_TYPE_FS;	// 别忘了这一句!!!
 	}
 }
 

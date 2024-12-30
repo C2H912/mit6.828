@@ -1,0 +1,124 @@
+====== 这是本项目从开始以来最难，最大的Bug ======
+
+
+---------- Bug的发现：
+
+在完成Lab 5 Exercise 9后，官方文档让我们运行一下make run-icode-nox，然后在shell中输入以下语句进行测试：
+    echo hello world | cat
+	cat lorem |cat
+	cat lorem |num
+	cat lorem |num |num |num |num |num
+	lsfd
+于是我试着输入echo hello world，cat lorem，lsfd，这些都没问题，直到我输入了含有管道操作符的指令，也就是：
+    echo hello | cat
+然后，多次运行会有以下几种情况发生：
+
+1. 报错kernel panic on CPU 0 at kern/pmap.c:444: page_free: pp->pp_link != NULL
+
+2. 报错user panic in  at lib/fork.c:37: pgfault: the faulting is not a write or not PTE_COW, fault addr: 0
+
+3. 报错user panic in sh at lib/file.c:124: assertion failed: r <= n
+
+4. 报错elf magic 6d77656e want 464c457f, spawn /cat: file is not a valid executable
+
+5. 报错sys_ipc_try_send: ret < 0
+
+6. 小概率正常运行
+
+(ー_ー) What the f**k ?! Holy sh*t ! 这是什么情况??? 
+
+我们来捋一下，首先实验做到这里，之前的测试用例grade程序都是全部通过的，而且现在也还能小概率正常运行，
+你说报错我认了，结果还能报不一样的错，错误的类型还能下至内存管理，上至文件系统，还不能稳定复现同一个错误！
+你就说这个Bug到底难不难崩，写了这么多年代码，出现这种情况还是极其罕见的，所以记录一下，带来一点启发。
+
+
+---------- 尝试修复Bug：
+
+出现Bug后，首先肯定是定位Bug，只有知道出现的位置，才能顺藤摸瓜发现原因，知道原因才好修复。
+目前运行echo hello | cat这个过程已经发生了非常非常多的事情，先增加点输出日志，看看问题大概出现在哪里，
+你可以切到Debug分支那里，看看我增加了一系列的Debug输出（得把debug标志打开）。加了输出后捋一下执行的过程，
+还是比较复杂的，因为涉及到fork，spawn，也涉及到用户进程跟内核、文件系统进程的交互，好吧，最后发现经常是最后
+一个fork出来的子进程出问题，现在先盯着它干了些什么。
+
+于是启动gdb，打断点。
+
+然而，问题并没有这么简单，我发现目前gdb只加载了内核的符号表，没有用户程序的符号表，也就是说，在目前现有
+的情况下我没有办法在用户程序里面设置断点！不仅如此，就算我在触发中断进入内核时设置了断点，也没有办法通过回溯
+查看执行流程，因为用户程序在gdb眼中就是一系列汇编语句，无法解释成对应的C语句。（如果读者有什么好的办法，
+欢迎补充；如果我这里说错了，也欢迎指出）
+
+更糟糕的是，像page_free: pp->pp_link != NULL这种错误，涉及到物理页的，这个物理页可能会被多个进程映射，
+例如COW，也就是多个进程都会对它产生影响，同时内核也会对物理页进行管理操作。这个错误可能涉及到多方的影响，
+就算我能打断点调试，我又怎么能同时记录所有进程对它的所有操作呢？
+
+到这里，前途似乎一片黑暗，都做到快结束的地方了，真的只能止步于此吗？
+
+于是我开始检查代码————多次执行结果不同，是不是有可能跟调度有关？那是不是sched_yield()和env_run()写错了？
+fault addr为0，是不是我的中断处理入口没设置，是默认0值，所以发生用户中断时跳到了0地址？......
+
+很遗憾并没有发现问题。
+
+突然，我想到一个另辟蹊径的办法。
+
+因为这个项目比较出名，网上已经有人给出了自己的实验代码，人家的代码能正确运行的话，我能不能借助别人的代码帮我debug呢？
+这并不是说要把别人的代码全看一遍，这样太低效了，代码那么多。我的做法是，直接用别人的代码逐步替换一下我的代码，看看
+我的代码到底是哪里出了问题。
+
+我用的是这位同学的代码：
+    知乎地址：https://zhuanlan.zhihu.com/p/74028717
+    对应的github地址：https://github.com/SmallPond/MIT6.828_OS
+!!! 在这里首先表达我的感谢与尊敬 !!! 万分感谢这位朋友的无私奉献，同时对前辈表达敬意 !!!
+
+首先锁定跟内存管理相关的文件pmap.c，因为报错明显跟内存有关系，于是我把pmap.c整份复制过来，运行，然后竟然没有报错！
+多次运行，也没有报错！什么？这运气也太好了，直接找到问题所在，然后再找具体的问题，还原回我的代码，一个一个函数的替换，
+最后定位到page_lookup()函数。
+
+前辈的代码是这样写的：https://github.com/SmallPond/MIT6.828_OS/blob/master/lab/kern/pmap.c
+    struct PageInfo *
+    page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
+    {
+        // Fill this function in
+        pte_t *pte = pgdir_walk(pgdir, va, 0);
+        if (!pte) {
+
+            return NULL;
+        }
+        if (pte_store) {
+            *pte_store = pte;  // 通过指针的指针返回指针给调用者
+        }
+        
+        // 难道不用考虑页表项是否存在
+        
+        if (*pte & PTE_P) {
+
+            return (pa2page(PTE_ADDR(*pte)));
+        }
+        
+        return NULL;
+        
+        //return pa2page(PTE_ADDR(*pte));
+    }
+
+然后我是这样写的：
+    struct PageInfo *
+    page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
+    {
+        // Fill this function in
+        // Lab 2 Exercise 4 返回虚拟地址va对应的实际物理页
+        // 先找到页表，再读出页表项对应的物理页即可
+        pte_t *pte = pgdir_walk(pgdir, va, 0);
+        if(pte == NULL) {
+            return NULL;
+        }
+        if(pte_store != NULL) {
+            *pte_store = pte; 
+        }
+        return pa2page(*pte);
+    }
+
+前辈说："难道不用考虑页表项是否存在"，这个问题我来回答，那就是要要要要要要要考虑啊啊啊啊啊，
+毕竟我取到一个页表项的地址，这个地址不为空，不代表地址指向的内容就不为空啊，这是显而易见的
+事实。如果里面的内容为空，说明对应的物理页根本就不存在，应该返回NULL才对，我却直接返回了一个错误的
+物理页指针pa2page(*pte)，这样访存不出问题才怪了，为什么我当时就没有注意到呢，气！
+
+这个bug卡了我整整两天，好在最后还是解决掉了。
